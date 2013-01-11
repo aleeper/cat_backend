@@ -48,7 +48,8 @@ private:
   void dynamicReconfigureCallback(cat_backend::BackendConfig &config, uint32_t level)
   {
     // do some stuff
-    ROS_ERROR("Dynamic reconfigure callback has not been implemented!");
+    ROS_ERROR("Dynamic reconfigure callback has not been implemented, but we are just copying the default configuration!");
+    owner_->config_ = config;
   }
 
   CatBackend *owner_;
@@ -112,9 +113,17 @@ cat::CatBackend::CatBackend(bool debug)
 
   reconfigure_impl_ = new DynamicReconfigureImpl(this);
 
-  // Now we actually go...
-  changedPlanningGroup();
+  planning_scene_monitor_->startPublishingPlanningScene(planning_scene_monitor_->UPDATE_SCENE);
 
+
+  kinematic_state::KinematicStatePtr ks(new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
+  query_goal_state_.reset(new robot_interaction::RobotInteraction::InteractionHandler("goal", *ks, planning_scene_monitor_->getTFClient()));
+  //query_goal_state_->setUpdateCallback(boost::bind(&CatBackend::drawQueryGoalState, this));
+  query_goal_state_->setStateValidityCallback(boost::bind(&CatBackend::isIKSolutionCollisionFree, this, _1, _2));
+
+  // Now we actually go...
+  ROS_INFO("Finsihing constructor...");
+  changedPlanningGroup();
 }
 
 cat::CatBackend::~CatBackend(void)
@@ -122,13 +131,25 @@ cat::CatBackend::~CatBackend(void)
   // Nothing
 }
 
+bool cat::CatBackend::isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const
+{
+  if ( planning_scene_monitor_)
+  {
+    group->setVariableValues(ik_solution);
+    return !getPlanningSceneRO()->isStateColliding(*group->getKinematicState(), group->getName());
+  }
+  else
+    return true;
+}
+
 void cat::CatBackend::publishInteractiveMarkers(void)
 {
   if (robot_interaction_)
   {
     robot_interaction_->clearInteractiveMarkers();
-    if ( config_.query_goal_state )
-      robot_interaction_->addInteractiveMarkers(query_goal_state_, config_.marker_scale);
+    //if ( config_.query_goal_state )
+    if(true)
+      robot_interaction_->addInteractiveMarkers(query_goal_state_, 1);
     robot_interaction_->publishInteractiveMarkers();
   }
 }
@@ -154,9 +175,11 @@ std::string cat::CatBackend::getCurrentPlanningGroup(void) const
 void cat::CatBackend::changedPlanningGroup(void)
 {
   std::string group = config_.planning_group;
+  ROS_INFO("Changing to group [%s]", group.c_str());
   if (!group.empty())
     if (!getKinematicModel()->hasJointModelGroup(group))
     {
+      ROS_ERROR("Didn't find JointModelGroup for group [%s]", group.c_str());
       config_.planning_group = "";
       return;
     }

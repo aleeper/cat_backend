@@ -67,6 +67,8 @@ protected: // methods
 
   void publishInteractiveMarkers(void);
   void changedPlanningGroup(void);
+  bool isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const;
+
 
 //  const kinematic_state::KinematicStatePtr& getQueryStartState(void) const
 //  {

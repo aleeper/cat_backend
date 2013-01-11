@@ -1,0 +1,36 @@
+<launch>
+  <arg name="cat_node_name" value="cat_backend_node" />
+
+  <include file="$(find pr2_moveit_config)/launch/planning_context.launch" />
+
+  <arg name="debug" default="false" />
+  <arg unless="$(arg debug)" name="launch_prefix" value="" />
+  <arg     if="$(arg debug)" name="launch_prefix" value="gdb --ex run --args" />
+
+  <arg unless="$(arg debug)" name="command_args" value="" />
+  <arg     if="$(arg debug)" name="command_args" value="--debug" />
+
+  <arg name="allow_trajectory_execution" default="true"/>
+  <arg name="max_safe_path_cost" default="1"/>
+
+  <include ns="$(arg cat_node_name)" file="$(find pr2_moveit_config)/launch/planning_pipeline.launch">
+    <arg name="pipeline" value="ompl" />
+  </include>
+
+  <include ns="$(arg cat_node_name)" file="$(find pr2_moveit_config)/launch/trajectory_execution.launch" if="$(arg allow_trajectory_execution)">
+    <arg name="moveit_controller_manager" value="pr2" /> 
+    <arg name="moveit_manage_controllers" value="true" />
+  </include>
+
+  <include ns="$(arg cat_node_name)" file="$(find pr2_moveit_config)/launch/sensor_manager.launch" if="$(arg allow_trajectory_execution)">
+    <arg name="moveit_sensor_manager" value="pr2" /> 
+  </include>
+
+  <node name="$(arg cat_node_name)" launch-prefix="$(arg launch_prefix)" pkg="cat_backend" type="cat_backend_node" respawn="false" output="screen" args="$(arg command_args)">
+    <param name="allow_trajectory_execution" value="$(arg allow_trajectory_execution)"/>
+    <param name="max_safe_path_cost" value="$(arg max_safe_path_cost)"/>
+    <param name="planning_scene_monitor/publish_planning_scene" value="true"/>
+    <rosparam command="load" file="$(find pr2_moveit_config)/config/kinematics.yaml"/>
+  </node>
+  
+</launch>
