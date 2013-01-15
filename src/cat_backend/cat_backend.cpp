@@ -208,6 +208,8 @@ void cat::CatBackend::computeTeleopUpdate()
   ros::Duration target_period = ros::Duration(config_.target_period);
   ros::Time update_start_time = ros::Time::now();
 
+  planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
+
   switch(config_.teleop_mode)
   {
     case(cat_backend::Backend_TELEOP_JT):
@@ -218,7 +220,13 @@ void cat::CatBackend::computeTeleopUpdate()
       break;
     case(cat_backend::Backend_TELEOP_MP):
       //ROS_WARN("TELEOP_MP is not implemented!");
-      computeTeleopMPUpdate(target_period);
+      try{
+        computeTeleopMPUpdate(target_period);
+      }
+      catch(...)
+      {
+        ROS_ERROR("Caught some kind of exception...");
+      }
       break;
     case(cat_backend::Backend_TELEOP_CVX):
       ROS_WARN("TELEOP_CVX is not implemented!");
@@ -243,6 +251,7 @@ void cat::CatBackend::computeTeleopUpdate()
 
 void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
 {
+  ROS_INFO("TeleopMPUpdate!");
   std::string group_name = getCurrentPlanningGroup();
 
   if (group_name.empty())
@@ -293,12 +302,12 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
     return;
   }
 
+  ROS_INFO("Planning SUCCESS, executing...");
+
   plan_execution_->getTrajectoryExecutionManager()->pushAndExecute(result.planned_trajectory_); // TODO should specify the controller huh?
   current_plan_.reset(new move_group_interface::MoveGroup::Plan());
   current_plan_->trajectory_ = result.planned_trajectory_;
   current_plan_->start_state_ = mreq.start_state;
-
-  //move_group_->move();
 }
 
 void cat::CatBackend::setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz)
@@ -319,6 +328,8 @@ void cat::CatBackend::onQueryGoalStateUpdate()
   moveit_msgs::PlanningScene gs;
   kinematic_state::kinematicStateToRobotState(*getQueryGoalState(), gs.robot_state);
   publish_goal_state_.publish(gs);
+  planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
+  query_goal_state_->setState(lscene.getPlanningSceneMonitor()->getPlanningScene()->getCurrentState());
 }
 
 bool cat::CatBackend::isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const

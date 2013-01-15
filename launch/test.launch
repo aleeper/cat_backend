@@ -16,10 +16,10 @@
 
   <include file="$(find cat_backend)/launch/cat_backend.launch">
     <arg name="allow_trajectory_execution" value="$(arg allow_trajectory_execution)"/>
+    <arg name="debug" value="$(arg debug)" />
   </include>
 
   <include file="$(find cat_backend)/launch/moveit_rviz.launch">
-    <arg name="debug" value="$(arg debug)" />
   </include>
 
 </launch>
