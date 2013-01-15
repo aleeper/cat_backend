@@ -94,6 +94,7 @@ link_directories(${catkin_LIBRARY_DIRS})
 ## Declare a cpp library
  add_library(cat_backend
    src/${PROJECT_NAME}/cat_backend.cpp
+   src/${PROJECT_NAME}/background_processing.cpp
  )
 target_link_libraries(cat_backend ${catkin_LIBRARIES} ${Boost_LIBRARIES})
 

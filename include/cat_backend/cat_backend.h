@@ -30,12 +30,17 @@
 #ifndef _CAT_BACKEND_
 #define _CAT_BACKEND_
 
+#include <cat_backend/background_processing.h>
+#include <cat_backend/BackendConfig.h>
+
 #include <moveit/robot_interaction/robot_interaction.h>
 
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 #include <moveit/move_group/names.h>
 #include <actionlib/server/simple_action_server.h>
 #include <moveit_msgs/MoveGroupAction.h>
+#include <moveit/move_group_interface/move_group.h>
+
 //#include <moveit_msgs/ExecuteKnownTrajectory.h>
 //#include <moveit_msgs/QueryPlannerInterfaces.h>
 
@@ -46,7 +51,7 @@
 #include <ros/ros.h>
 
 #include <dynamic_reconfigure/server.h>
-#include <cat_backend/BackendConfig.h>
+
 
 
 namespace cat
@@ -62,12 +67,29 @@ public:
   planning_scene_monitor::LockedPlanningSceneRW getPlanningSceneRW(void);
   const planning_scene_monitor::PlanningSceneMonitorPtr& getPlanningSceneMonitor(void);
 
+  // pass the execution of this function call to a separate thread that runs in the background
+  void addBackgroundJob(const boost::function<void(void)> &job);
+
+  // queue the execution of this function for the next time the main update() loop gets called
+  void addMainLoopJob(const boost::function<void(void)> &job);
+
 
 protected: // methods
 
   void publishInteractiveMarkers(void);
   void changedPlanningGroup(void);
   bool isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const;
+
+  void executeMainLoopJobs(void);
+  void updateBackgroundJobProgressBar(void);
+  void backgroundJobCompleted(void);
+
+  void computeTeleopUpdate();
+  void computeTeleopMPUpdate(const ros::Duration& target_period);
+
+  void setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz);
+
+  std::string modeToStr(int mode);
 
 
 //  const kinematic_state::KinematicStatePtr& getQueryStartState(void) const
@@ -100,6 +122,8 @@ protected: // methods
 
   void updateQueryStartState(void);
   void updateQueryGoalState(void);
+
+  void onQueryGoalStateUpdate(void);
 
   std::string getCurrentPlanningGroup(void) const;
 
@@ -149,9 +173,19 @@ protected: // members
 //  ros::ServiceServer execute_service_;
 //  ros::ServiceServer query_service_;
 
-  ros::Publisher publish_start_state_;
+  //ros::Publisher publish_start_state_;
   ros::Publisher publish_goal_state_;
   ros::Publisher publish_current_state_;
+
+  boost::shared_ptr<move_group_interface::MoveGroup::Plan> current_plan_;
+
+
+  BackgroundProcessing background_process_;
+  std::deque<boost::function<void(void)> > main_loop_jobs_;
+  boost::mutex main_loop_jobs_lock_;
+
+
+  moveit_msgs::WorkspaceParameters workspace_parameters_;
 
 
 //  MoveGroupState move_state_;
