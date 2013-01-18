@@ -237,7 +237,6 @@ void cat::CatBackend::computeTeleopUpdate()
         break;
       case(cat_backend::Backend_TELEOP_IK):
         computeTeleopIKUpdate(target_period);
-        ROS_WARN("TELEOP_IK is not implemented!");
         break;
       case(cat_backend::Backend_TELEOP_MP):
         //ROS_WARN("TELEOP_MP is not implemented!");
@@ -277,62 +276,41 @@ void cat::CatBackend::computeTeleopUpdate()
 
 void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
 {
-  ROS_DEBUG("TeleopMPUpdate!");
+  ROS_DEBUG("TeleopIKUpdate!");
   std::string group_name = getCurrentPlanningGroup();
 
   if (group_name.empty())
     return;
 
-  // ==========================================
-  // Now start planning the next one...
-  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
 
-  ros::Time future_time = ros::Time::now() + target_period;
+  moveit_msgs::RobotTrajectory traj;
+  traj.joint_trajectory.points.resize(1);
+  traj.joint_trajectory.points[0].time_from_start = ros::Duration(0, 0);
 
-  ROS_DEBUG("Formulating planning request");
-  moveit_msgs::MotionPlanRequest mreq;
-  mreq.allowed_planning_time = target_period*0.75;
-  mreq.num_planning_attempts = 1;
-  psi_.getStateAtTime( future_time, future_start_state, mreq.start_state);
-  mreq.group_name = group_name;
-
-
-  ROS_DEBUG("Constructing goal constraint...");
-  mreq.goal_constraints.resize(1);
-  last_goal_state_lock_.lock();
-  mreq.goal_constraints[0] = kinematic_constraints::constructGoalConstraints(last_goal_state_->getState()->getJointStateGroup(group_name), config_.goal_tolerance);
-  last_goal_state_lock_.unlock();
-
-  ROS_DEBUG("Requesting plan...");
-  plan_execution_->planOnly(mreq);
-  plan_execution::PlanExecution::Result result = plan_execution_->getLastResult();
-  if(result.error_code_.val == moveit_msgs::MoveItErrorCodes::SUCCESS)
   {
-    ROS_INFO("Planning SUCCESS, saving plan.");
-    move_group_interface::MoveGroup::Plan plan;
-    plan.trajectory_ = result.planned_trajectory_;
-    plan.start_state_ = mreq.start_state;
-    plan.trajectory_.joint_trajectory.header.stamp = future_time;
-    psi_.setPlan(plan);
-  }
-  else
-  {
-    ROS_ERROR("Planning FAILED, not saving anything.");
+    last_goal_state_lock_.lock();
+    const std::vector<kinematic_state::JointState*>& jsv = last_goal_state_->getState()->getJointStateGroup(group_name)->getJointStateVector();
+    traj.joint_trajectory.joint_names.resize(jsv.size());
+    traj.joint_trajectory.points[0].positions.resize(jsv.size());
+    traj.joint_trajectory.points[0].velocities.resize(jsv.size());
+    traj.joint_trajectory.header.frame_id = last_goal_state_->getState()->getKinematicModel()->getModelFrame();
+    traj.joint_trajectory.header.stamp = ros::Time(0);
+
+    // Now actually populate the joints...
+    for(int i = 0; i < jsv.size(); i++ )
+    {
+      kinematic_state::JointState* js = jsv[i];
+      traj.joint_trajectory.joint_names[i] = js->getName();
+      traj.joint_trajectory.points[0].positions[i] = js->getVariableValues()[0];
+      traj.joint_trajectory.points[0].velocities[i] = 0.0;  // TODO could we estimate velocity?
+    }
+    last_goal_state_lock_.unlock();
   }
 
-  // ==========================================
-  // Send out last plan for execution.
-  // It is stamped with a time in the future, so it should be ok to send it now.
-  if(psi_.hasNewPlan())
-  {
-    plan_execution_->getTrajectoryExecutionManager()->pushAndExecute(psi_.getPlan().trajectory_); // TODO should specify the controller huh?
-    psi_.setPlanAsOld();
-  }
-  else
-  {
-    ROS_ERROR("No plan saved, not executing anything.");
-  }
-  ROS_DEBUG("Done with TeleopMPUpdate");
+//  kinematic_state::kinematicStateToJointState(, js);
+  plan_execution_->getTrajectoryExecutionManager()->pushAndExecute(traj); // TODO should specify the controller huh?
+
+  ROS_DEBUG("Done with TeleopIKUpdate");
 }
 
 void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
