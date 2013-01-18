@@ -56,8 +56,8 @@ private:
     // do some stuff
     //ROS_ERROR("Dynamic reconfigure callback has not been implemented, but we are just copying the default configuration!");
     owner_->config_ = config;
-    //if(level == 1)
-    owner_->changedPlanningGroup();
+    if(level == 1)
+      owner_->changedPlanningGroup();
 
     if(owner_->query_goal_state_)
     {
@@ -129,7 +129,7 @@ cat::CatBackend::CatBackend(bool debug)
 
   kinematic_state::KinematicStatePtr ks(new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
   query_goal_state_.reset(new robot_interaction::RobotInteraction::InteractionHandler("goal", *ks, planning_scene_monitor_->getTFClient()));
-  query_goal_state_->setUpdateCallback(boost::bind(&CatBackend::onQueryGoalStateUpdate, this));
+  query_goal_state_->setUpdateCallback(boost::bind(&CatBackend::onQueryGoalStateUpdate, this, _1));
   query_goal_state_->setStateValidityCallback(boost::bind(&CatBackend::isIKSolutionCollisionFree, this, _1, _2));
   ROS_INFO("Query goal was initialized with %d attempts and %.3f second timeout.", query_goal_state_->getIKAttempts(), query_goal_state_->getIKTimeout());
   query_goal_state_->setIKAttempts(config_.ik_attempts);
@@ -228,32 +228,34 @@ void cat::CatBackend::computeTeleopUpdate()
 
   //planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
 
-  switch(config_.teleop_mode)
+  try
   {
-    case(cat_backend::Backend_TELEOP_JT):
-      ROS_WARN("TELEOP_JT is not implemented!");
-      break;
-    case(cat_backend::Backend_TELEOP_IK):
-      ROS_WARN("TELEOP_IK is not implemented!");
-      break;
-    case(cat_backend::Backend_TELEOP_MP):
-      //ROS_WARN("TELEOP_MP is not implemented!");
-      try{
+    switch(config_.teleop_mode)
+    {
+      case(cat_backend::Backend_TELEOP_JT):
+        ROS_WARN("TELEOP_JT is not implemented!");
+        break;
+      case(cat_backend::Backend_TELEOP_IK):
+        computeTeleopIKUpdate(target_period);
+        ROS_WARN("TELEOP_IK is not implemented!");
+        break;
+      case(cat_backend::Backend_TELEOP_MP):
+        //ROS_WARN("TELEOP_MP is not implemented!");
         computeTeleopMPUpdate(target_period);
-      }
-      catch(...)
-      {
-        ROS_ERROR("Caught some kind of exception...");
-      }
-      break;
-    case(cat_backend::Backend_TELEOP_CVX):
-      ROS_WARN("TELEOP_CVX is not implemented!");
-      break;
-    case(cat_backend::Backend_TELEOP_DISABLE):
-      ROS_WARN("It seems teleop was DISABLED sometime between the last queueing action and now!");
-      break;
-    default:
-      ROS_ERROR("An unhandled teleop state was requested.");
+        break;
+      case(cat_backend::Backend_TELEOP_CVX):
+        ROS_WARN("TELEOP_CVX is not implemented!");
+        break;
+      case(cat_backend::Backend_TELEOP_DISABLE):
+        ROS_WARN("It seems teleop was DISABLED sometime between the last queueing action and now!");
+        break;
+      default:
+        ROS_ERROR("An unhandled teleop state was requested.");
+    }
+  }
+  catch(...)
+  {
+    ROS_ERROR("Caught some kind of exception...");
   }
 
   ros::Duration time_used = ros::Time::now() - update_start_time;
@@ -273,7 +275,7 @@ void cat::CatBackend::computeTeleopUpdate()
 
 }
 
-void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
+void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
 {
   ROS_DEBUG("TeleopMPUpdate!");
   std::string group_name = getCurrentPlanningGroup();
@@ -333,6 +335,73 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   ROS_DEBUG("Done with TeleopMPUpdate");
 }
 
+void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
+{
+  ROS_DEBUG("TeleopMPUpdate!");
+  std::string group_name = getCurrentPlanningGroup();
+
+  if (group_name.empty())
+    return;
+
+  // ==========================================
+  // Now start planning the next one...
+  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
+
+  ros::Time future_time = ros::Time::now() + target_period;
+
+  ROS_DEBUG("Formulating planning request");
+  moveit_msgs::MotionPlanRequest mreq;
+  mreq.allowed_planning_time = target_period*0.75;
+  mreq.num_planning_attempts = 1;
+  psi_.getStateAtTime( future_time, future_start_state, mreq.start_state);
+  mreq.group_name = group_name;
+
+
+  ROS_DEBUG("Constructing goal constraint...");
+  mreq.goal_constraints.resize(1);
+  last_goal_state_lock_.lock();
+  mreq.goal_constraints[0] = kinematic_constraints::constructGoalConstraints(last_goal_state_->getState()->getJointStateGroup(group_name), config_.goal_tolerance);
+  last_goal_state_lock_.unlock();
+
+  ROS_DEBUG("Requesting plan...");
+  plan_execution_->planOnly(mreq);
+  plan_execution::PlanExecution::Result result = plan_execution_->getLastResult();
+  if(result.error_code_.val == moveit_msgs::MoveItErrorCodes::SUCCESS)
+  {
+    if(future_time < ros::Time::now() + ros::Duration(0.005)) // TODO this offset is a totally magic number...
+    {
+      ROS_ERROR("Planning took too long, discarding result.");
+    }
+    else
+    {
+      ROS_INFO("Planning SUCCESS, saving plan.");
+      move_group_interface::MoveGroup::Plan plan;
+      plan.trajectory_ = result.planned_trajectory_;
+      plan.start_state_ = mreq.start_state;
+      plan.trajectory_.joint_trajectory.header.stamp = future_time;
+      psi_.setPlan(plan);
+    }
+  }
+  else
+  {
+    ROS_ERROR("Planning FAILED, not saving anything.");
+  }
+
+  // ==========================================
+  // Send out last plan for execution.
+  // It is stamped with a time in the future, so it should be ok to send it now.
+  if(psi_.hasNewPlan())
+  {
+    plan_execution_->getTrajectoryExecutionManager()->pushAndExecute(psi_.getPlan().trajectory_); // TODO should specify the controller huh?
+    psi_.setPlanAsOld();
+  }
+  else
+  {
+    ROS_ERROR("No plan saved, not executing anything.");
+  }
+  ROS_DEBUG("Done with TeleopMPUpdate");
+}
+
 void cat::CatBackend::setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz)
 {
   workspace_parameters_.header.frame_id = getKinematicModel()->getModelFrame();
@@ -345,16 +414,51 @@ void cat::CatBackend::setWorkspace(double minx, double miny, double minz, double
   workspace_parameters_.max_corner.z = maxz;
 }
 
-void cat::CatBackend::onQueryGoalStateUpdate()
+void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih)
 {
+  const std::vector<robot_interaction::RobotInteraction::EndEffector>& aee = robot_interaction_->getActiveEndEffectors();
+  bool in_error = false;
+  for(int i=0; i < aee.size(); i++)
+  {
+    in_error = ih->inError(aee[i]) || in_error;
+  }
+
+
   //ROS_INFO("Publishing a goal state update!");
   moveit_msgs::PlanningScene gs;
-  last_goal_state_lock_.lock();
+  if(!in_error)
+  {
+    last_goal_state_lock_.lock();
     last_goal_state_->setState(*query_goal_state_->getState());
     kinematic_state::kinematicStateToRobotState(*last_goal_state_->getState(), gs.robot_state);
-    query_goal_state_->setState(getPlanningSceneRO()->getCurrentState());
-  last_goal_state_lock_.unlock();
+    last_goal_state_lock_.unlock();
+  }
+  else
+  {
+    // Do nothing?
+  }
+  updateInactiveGroupsFromCurrentRobot();
   publish_goal_state_.publish(gs);
+}
+
+void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
+{
+  ROS_DEBUG("Updating inactive groups!");
+  kinematic_state::KinematicState new_state = getPlanningSceneRO()->getCurrentState();
+  kinematic_state::KinematicState query_state = *query_goal_state_->getState();
+  kinematic_state::JointStateGroup* jsg = query_state.getJointStateGroup(getCurrentPlanningGroup());
+  if(jsg)
+  {
+    //ROS_INFO("Setting values for group %s", jsg->getName().c_str());
+    const std::vector<kinematic_state::JointState*>& jsv =  jsg->getJointStateVector();
+    for(size_t i=0; i < jsv.size(); i++)
+    {
+      //("Setting values for joint %s", jsv[i]->getName().c_str());
+      new_state.getJointState(jsv[i]->getName())->setVariableValues(jsv[i]->getVariableValues());
+    }
+  }
+  //ROS_INFO("Setting new query state!");
+  query_goal_state_->setState(new_state);
 }
 
 bool cat::CatBackend::isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const

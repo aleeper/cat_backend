@@ -30,6 +30,7 @@
 /* Author: Ioan Sucan */
 
 #include <cat_backend/background_processing.h>
+#include <ros/init.h>
 #include <ros/console.h>
 
 namespace cat
@@ -54,12 +55,16 @@ void BackgroundProcessing::processingThread(void)
 {
   boost::unique_lock<boost::mutex> ulock(action_lock_);
 
-  while (run_processing_thread_)
+  while (run_processing_thread_ && ros::ok())
   {
-    while (actions_.empty() && run_processing_thread_)
-      new_action_condition_.wait(ulock);
-    
-    while (!actions_.empty())
+    // This timed_wait is needed so that the node goes down quickly when requested.
+    boost::system_time const timeout=boost::get_system_time()+ boost::posix_time::milliseconds(100);
+    while (actions_.empty() && run_processing_thread_ && ros::ok())
+    {
+      new_action_condition_.timed_wait(ulock, timeout);
+    }
+
+    while (!actions_.empty() && ros::ok())
     {
       boost::function<void(void)> fn = actions_.front();
       actions_.pop_front();

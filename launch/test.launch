@@ -2,9 +2,8 @@
 
   <arg name="debug" default="false" />
   <arg name="robot" default="false" />
+  <arg name="upload_urdf" default="true" />
   <arg name="allow_trajectory_execution" value="$(arg robot)" />
-
-  <include file="$(find pr2_description)/robots/upload_pr2.launch"/>
 
   <node unless="$(arg robot)" pkg="tf" type="static_transform_publisher" name="odom_broadcaster" args="0 0 0 0 0 0 odom_combined base_footprint 100" />
 
@@ -15,6 +14,7 @@
   <node unless="$(arg robot)" name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" respawn="true" output="screen" />
 
   <include file="$(find cat_backend)/launch/cat_backend.launch">
+    <arg name="upload_urdf" value="$(arg upload_urdf)" />
     <arg name="allow_trajectory_execution" value="$(arg allow_trajectory_execution)"/>
     <arg name="debug" value="$(arg debug)" />
   </include>

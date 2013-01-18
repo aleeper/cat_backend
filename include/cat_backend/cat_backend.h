@@ -214,7 +214,10 @@ protected: // methods
   void backgroundJobCompleted(void);
 
   void computeTeleopUpdate();
+  void computeTeleopJTUpdate(const ros::Duration& target_period);
+  void computeTeleopIKUpdate(const ros::Duration& target_period);
   void computeTeleopMPUpdate(const ros::Duration& target_period);
+  void computeTeleopCVXUpdate(const ros::Duration& target_period);
 
   void setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz);
 
@@ -252,7 +255,8 @@ protected: // methods
   void updateQueryStartState(void);
   void updateQueryGoalState(void);
 
-  void onQueryGoalStateUpdate(void);
+  void onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih);
+  void updateInactiveGroupsFromCurrentRobot();
 
   std::string getCurrentPlanningGroup(void) const;
 

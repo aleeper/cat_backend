@@ -1,8 +1,6 @@
 <launch>
   <arg name="cat_node_name" value="cat_backend_node" />
 
-  <include file="$(find pr2_moveit_config)/launch/planning_context.launch" />
-
   <arg name="debug" default="false" />
   <arg unless="$(arg debug)" name="launch_prefix" value="" />
   <arg     if="$(arg debug)" name="launch_prefix" value="gdb --ex run --args" />
@@ -10,9 +8,14 @@
   <arg unless="$(arg debug)" name="command_args" value="" />
   <arg     if="$(arg debug)" name="command_args" value="--debug" />
 
+  <arg name="upload_urdf" default="false" />
   <arg name="allow_trajectory_execution" default="true"/>
   <arg name="max_safe_path_cost" default="1"/>
 
+  <include file="$(find cat_backend)/launch/planning_context.launch" >
+    <arg name="upload_urdf" value="$(arg upload_urdf)" />
+  </include>
+  
   <include ns="$(arg cat_node_name)" file="$(find pr2_moveit_config)/launch/planning_pipeline.launch">
     <arg name="pipeline" value="ompl" />
   </include>
@@ -30,7 +33,7 @@
     <param name="allow_trajectory_execution" value="$(arg allow_trajectory_execution)"/>
     <param name="max_safe_path_cost" value="$(arg max_safe_path_cost)"/>
     <param name="planning_scene_monitor/publish_planning_scene" value="true"/>
-    <rosparam command="load" file="$(find pr2_moveit_config)/config/kinematics.yaml"/>
+    <rosparam command="load" file="$(find cat_backend)/config/kinematics.yaml"/>
   </node>
   
 </launch>
