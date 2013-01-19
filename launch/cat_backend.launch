@@ -19,6 +19,10 @@
   <include ns="$(arg cat_node_name)" file="$(find pr2_moveit_config)/launch/planning_pipeline.launch">
     <arg name="pipeline" value="ompl" />
   </include>
+  
+  <include ns="$(arg cat_node_name)" file="$(find cat_backend)/launch/planning_pipeline.launch">
+    <arg name="pipeline" value="cat" />
+  </include>
 
   <include ns="$(arg cat_node_name)" file="$(find pr2_moveit_config)/launch/trajectory_execution.launch" if="$(arg allow_trajectory_execution)">
     <arg name="moveit_controller_manager" value="pr2" /> 

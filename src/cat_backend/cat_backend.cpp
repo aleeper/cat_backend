@@ -94,6 +94,12 @@ cat::CatBackend::CatBackend(bool debug)
   tfl_.reset(new tf::TransformListener());
   planning_scene_monitor_.reset(new planning_scene_monitor::PlanningSceneMonitor(move_group::ROBOT_DESCRIPTION, tfl_));
 
+  // pipeline that uses cat_planners
+  cat_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
+                                                              "cat_planning_plugin",
+                                                              "cat_request_adapters"));
+
+
   if (planning_scene_monitor_->getPlanningScene() && planning_scene_monitor_->getPlanningScene()->isConfigured())
   {
     ROS_INFO("Starting world, scene, and state monitor.");
@@ -243,7 +249,7 @@ void cat::CatBackend::computeTeleopUpdate()
         computeTeleopMPUpdate(target_period);
         break;
       case(cat_backend::Backend_TELEOP_CVX):
-        ROS_WARN("TELEOP_CVX is not implemented!");
+        computeTeleopCVXUpdate(target_period);
         break;
       case(cat_backend::Backend_TELEOP_DISABLE):
         ROS_WARN("It seems teleop was DISABLED sometime between the last queueing action and now!");
@@ -271,7 +277,100 @@ void cat::CatBackend::computeTeleopUpdate()
   // When all is done, it gets ready to call itself again!
   if(config_.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
     addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, this));
+}
 
+void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
+{
+  ROS_DEBUG("TeleopCVXUpdate!");
+  std::string group_name = getCurrentPlanningGroup();
+  if (group_name.empty())
+    return;
+
+  const std::vector<robot_interaction::RobotInteraction::EndEffector>& aee = robot_interaction_->getActiveEndEffectors();
+  if(aee.size() == 0)
+  {
+    ROS_WARN("No active end-effector, so can't do CVX update!");
+    return;
+  }
+
+  geometry_msgs::PoseStamped goal_pose;
+  if(aee.size() > 1)
+    ROS_WARN("There are %zd active end-effectors, only handling the first one... (this will probably cause a crash in the planner)", aee.size());
+
+  robot_interaction::RobotInteraction::EndEffector ee = aee[0];
+
+  getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(ee, goal_pose);
+
+  ros::Time future_time = ros::Time::now() + target_period;
+  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
+  // TODO add an estimated velocity correction so that the arm moves smoothly!
+
+  moveit_msgs::MoveItErrorCodes error_code;
+  move_group_interface::MoveGroup::Plan plan;
+
+  bool solved = false;
+  {
+    moveit_msgs::GetMotionPlan::Request req;
+    moveit_msgs::GetMotionPlan::Response res;
+
+    req.motion_plan_request.group_name = group_name;
+    psi_.getStateAtTime( future_time, future_start_state, req.motion_plan_request.start_state);
+//    kinematic_state::kinematicStateToRobotState(*future_start_state, req.motion_plan_request.start_state);
+
+    req.motion_plan_request.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(ee.parent_link, goal_pose));
+    req.motion_plan_request.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(future_start_state->getJointStateGroup(group_name),
+                                                                                                       .001, .001));
+    req.motion_plan_request.num_planning_attempts = config_.velocity_constraint_only + 1;
+    req.motion_plan_request.allowed_planning_time = target_period*0.75;  // TODO fix this in the planner!
+
+    try
+    {
+      // lock the planning scene in this scope
+      planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
+      ROS_DEBUG_NAMED("cat_backend", "Issuing CAT planning request...");
+      solved = cat_planning_pipeline_->generatePlan(planning_scene_monitor_->getPlanningScene(), req, res);
+    }
+    catch(std::runtime_error &ex)
+    {
+      ROS_ERROR("CAT planning pipeline threw an exception: %s", ex.what());
+    }
+    catch(...)
+    {
+      ROS_ERROR("CAT planning pipeline threw an exception");
+    }
+
+
+    if(!solved) {
+      ROS_WARN_STREAM("Response traj " << res.trajectory.joint_trajectory);
+    }
+    else
+    {
+      ROS_DEBUG_NAMED("cat_backend", "Planning succeded, storing result!");
+      ROS_DEBUG_STREAM_NAMED("cat_backend_verbose", res.trajectory);
+      plan.trajectory_ = res.trajectory;
+      plan.start_state_ = req.motion_plan_request.start_state;
+      plan.trajectory_.joint_trajectory.header.stamp = future_time; // TODO is this the right time?
+//      plan.trajectory_.joint_trajectory.points[0].time_from_start = ros::Duration(0);
+//      plan.trajectory_.joint_trajectory.points[1].time_from_start = ros::Duration(2*target_period.toSec());
+      psi_.setPlan(plan);
+    }
+  }
+
+  // ==========================================
+  // Send out last plan for execution.
+  // It is stamped with a time in the future, so it should be ok to send it now.
+  if(psi_.hasNewPlan())
+  {
+    ROS_DEBUG_NAMED("cat_backend", "Sending most recent plan for execution.");
+    plan_execution_->getTrajectoryExecutionManager()->pushAndExecute(psi_.getPlan().trajectory_); // TODO should specify the controller huh?
+    psi_.setPlanAsOld();
+  }
+  else
+  {
+    ROS_WARN("No plan saved, not executing anything.");
+  }
+
+  ROS_DEBUG("Done with TeleopCVXUpdate");
 }
 
 void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
@@ -282,11 +381,9 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
   if (group_name.empty())
     return;
 
-
   moveit_msgs::RobotTrajectory traj;
   traj.joint_trajectory.points.resize(1);
   traj.joint_trajectory.points[0].time_from_start = ros::Duration(0, 0);
-
   {
     last_goal_state_lock_.lock();
     const std::vector<kinematic_state::JointState*>& jsv = last_goal_state_->getState()->getJointStateGroup(group_name)->getJointStateVector();
@@ -306,10 +403,7 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
     }
     last_goal_state_lock_.unlock();
   }
-
-//  kinematic_state::kinematicStateToJointState(, js);
   plan_execution_->getTrajectoryExecutionManager()->pushAndExecute(traj); // TODO should specify the controller huh?
-
   ROS_DEBUG("Done with TeleopIKUpdate");
 }
 
@@ -375,7 +469,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   }
   else
   {
-    ROS_ERROR("No plan saved, not executing anything.");
+    ROS_WARN("No plan saved, not executing anything.");
   }
   ROS_DEBUG("Done with TeleopMPUpdate");
 }

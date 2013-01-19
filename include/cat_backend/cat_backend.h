@@ -263,12 +263,6 @@ protected: // methods
 
 protected: // members
 
-  // These could be useful...
-  //BackgroundProcessing background_process_;
-  //std::deque<boost::function<void(void)> > main_loop_jobs_;
-  //boost::mutex main_loop_jobs_lock_;
-
-
   // For drawing the robot...
   //KinematicStateVisualizationPtr query_robot_start_;                  ///< Handles drawing the robot at the start configuration
   //KinematicStateVisualizationPtr query_robot_goal_;                   ///< Handles drawing the robot at the goal configuration
@@ -294,6 +288,7 @@ protected: // members
   ros::NodeHandle node_handle_;
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
   plan_execution::PlanExecutionPtr plan_execution_;
+  planning_pipeline::PlanningPipelinePtr cat_planning_pipeline_;
   pick_place::PickPlacePtr pick_place_;
   bool allow_trajectory_execution_;
 
@@ -323,7 +318,6 @@ protected: // members
 
 
   moveit_msgs::WorkspaceParameters workspace_parameters_;
-
 
 //  MoveGroupState move_state_;
 //  MoveGroupState pickup_state_;
