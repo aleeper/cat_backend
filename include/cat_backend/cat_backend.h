@@ -205,7 +205,7 @@ public:
 
 protected: // methods
 
-  void publishInteractiveMarkers(void);
+  void clearAndRenewInteractiveMarkers(void);
   void changedPlanningGroup(void);
   bool isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const;
 
@@ -249,11 +249,11 @@ protected: // methods
     return query_goal_state_;
   }
 
-  void setQueryStartState(const kinematic_state::KinematicStatePtr &start);
-  void setQueryGoalState(const kinematic_state::KinematicStatePtr &goal);
+//  void setQueryStartState(const kinematic_state::KinematicStatePtr &start);
+//  void setQueryGoalState(const kinematic_state::KinematicStatePtr &goal);
 
-  void updateQueryStartState(void);
-  void updateQueryGoalState(void);
+//  void updateQueryStartState(void);
+//  void updateQueryGoalState(void);
 
   void onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih);
   void updateInactiveGroupsFromCurrentRobot();

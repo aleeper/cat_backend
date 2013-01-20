@@ -143,6 +143,7 @@ cat::CatBackend::CatBackend(bool debug)
   query_goal_state_->setInteractionMode( (config_.ik_type == cat_backend::Backend_POSITION_IK) ?
                                            robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
                                          : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
+  query_goal_state_->setMeshesVisible(true);
 
   last_goal_state_.reset(new robot_interaction::RobotInteraction::InteractionHandler("last_goal", *ks, planning_scene_monitor_->getTFClient()));
 
@@ -315,13 +316,12 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
 
     req.motion_plan_request.group_name = group_name;
     psi_.getStateAtTime( future_time, future_start_state, req.motion_plan_request.start_state);
-//    kinematic_state::kinematicStateToRobotState(*future_start_state, req.motion_plan_request.start_state);
 
     req.motion_plan_request.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(ee.parent_link, goal_pose));
-    req.motion_plan_request.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(future_start_state->getJointStateGroup(group_name),
-                                                                                                       .001, .001));
+//    req.motion_plan_request.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(future_start_state->getJointStateGroup(group_name),
+//                                                                                                       .001, .001));
     req.motion_plan_request.num_planning_attempts = config_.velocity_constraint_only + 1;
-    req.motion_plan_request.allowed_planning_time = target_period*0.75;  // TODO fix this in the planner!
+    req.motion_plan_request.allowed_planning_time = target_period*0.5;  // TODO mgic number!
 
     try
     {
@@ -494,8 +494,6 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
   {
     in_error = ih->inError(aee[i]) || in_error;
   }
-
-
   //ROS_INFO("Publishing a goal state update!");
   moveit_msgs::PlanningScene gs;
   if(!in_error)
@@ -510,6 +508,7 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
     // Do nothing?
   }
   updateInactiveGroupsFromCurrentRobot();
+  robot_interaction_->updateInteractiveMarkerProperties(getQueryGoalStateHandler());
   publish_goal_state_.publish(gs);
 }
 
@@ -517,8 +516,7 @@ void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
 {
   ROS_DEBUG("Updating inactive groups!");
   kinematic_state::KinematicState new_state = getPlanningSceneRO()->getCurrentState();
-  kinematic_state::KinematicState query_state = *query_goal_state_->getState();
-  kinematic_state::JointStateGroup* jsg = query_state.getJointStateGroup(getCurrentPlanningGroup());
+  kinematic_state::JointStateGroup* jsg = query_goal_state_->getState()->getJointStateGroup(getCurrentPlanningGroup());
   if(jsg)
   {
     //ROS_INFO("Setting values for group %s", jsg->getName().c_str());
@@ -544,31 +542,29 @@ bool cat::CatBackend::isIKSolutionCollisionFree(kinematic_state::JointStateGroup
     return true;
 }
 
-void cat::CatBackend::publishInteractiveMarkers(void)
+void cat::CatBackend::clearAndRenewInteractiveMarkers(void)
 {
   if (robot_interaction_)
   {
     ROS_INFO("Publishing interactive markers...");
     robot_interaction_->clearInteractiveMarkers();
-    //if ( config_.query_goal_state )
-    if(true)
-      robot_interaction_->addInteractiveMarkers(query_goal_state_, config_.marker_scale); // TODO magic number
+    robot_interaction_->addInteractiveMarkers(query_goal_state_, config_.marker_scale); // TODO magic number
     robot_interaction_->publishInteractiveMarkers();
   }
 }
 
-void cat::CatBackend::updateQueryGoalState(void)
-{
-  publishInteractiveMarkers();
-//  addMainLoopJob(boost::bind(&MotionPlanningDisplay::changedQueryGoalState, this));
-//  context_->queueRender();
-}
+//void cat::CatBackend::updateQueryGoalState(void)
+//{
+//  publishInteractiveMarkers();
+////  addMainLoopJob(boost::bind(&MotionPlanningDisplay::changedQueryGoalState, this));
+////  context_->queueRender();
+//}
 
-void cat::CatBackend::setQueryGoalState(const kinematic_state::KinematicStatePtr &goal)
-{
-  query_goal_state_->setState(*goal);
-  updateQueryGoalState();
-}
+//void cat::CatBackend::setQueryGoalState(const kinematic_state::KinematicStatePtr &goal)
+//{
+//  query_goal_state_->setState(*goal);
+//  updateQueryGoalState();
+//}
 
 std::string cat::CatBackend::getCurrentPlanningGroup(void) const
 {
@@ -592,7 +588,7 @@ void cat::CatBackend::changedPlanningGroup(void)
     ROS_INFO("Deciding active components for group [%s]", group.c_str());
     robot_interaction_->decideActiveComponents(group);
   }
-  publishInteractiveMarkers();
+  clearAndRenewInteractiveMarkers();
 }
 
 
