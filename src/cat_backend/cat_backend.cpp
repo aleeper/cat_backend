@@ -345,14 +345,21 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
     }
     else
     {
-      ROS_DEBUG_NAMED("cat_backend", "Planning succeded, storing result!");
-      ROS_DEBUG_STREAM_NAMED("cat_backend_verbose", res.trajectory);
-      plan.trajectory_ = res.trajectory;
-      plan.start_state_ = req.motion_plan_request.start_state;
-      plan.trajectory_.joint_trajectory.header.stamp = future_time; // TODO is this the right time?
-//      plan.trajectory_.joint_trajectory.points[0].time_from_start = ros::Duration(0);
-//      plan.trajectory_.joint_trajectory.points[1].time_from_start = ros::Duration(2*target_period.toSec());
-      psi_.setPlan(plan);
+      if(future_time < ros::Time::now() + ros::Duration(0.001)) // TODO this offset is a (vetted) magic number...
+      {
+        ROS_ERROR("Planning took too long, discarding result.");
+      }
+      else
+      {
+        ROS_DEBUG_NAMED("cat_backend", "Planning succeded, storing result!");
+        ROS_DEBUG_STREAM_NAMED("cat_backend_verbose", res.trajectory);
+        plan.trajectory_ = res.trajectory;
+        plan.start_state_ = req.motion_plan_request.start_state;
+        plan.trajectory_.joint_trajectory.header.stamp = future_time; // TODO is this the right time?
+        // plan.trajectory_.joint_trajectory.points[0].time_from_start = ros::Duration(0);
+        // plan.trajectory_.joint_trajectory.points[1].time_from_start = ros::Duration(2*target_period.toSec());
+        psi_.setPlan(plan);
+      }
     }
   }
 
@@ -440,7 +447,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   plan_execution::PlanExecution::Result result = plan_execution_->getLastResult();
   if(result.error_code_.val == moveit_msgs::MoveItErrorCodes::SUCCESS)
   {
-    if(future_time < ros::Time::now() + ros::Duration(0.005)) // TODO this offset is a totally magic number...
+    if(future_time < ros::Time::now() + ros::Duration(0.001)) // TODO this offset is a (vetted) magic number...
     {
       ROS_ERROR("Planning took too long, discarding result.");
     }
