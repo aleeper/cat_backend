@@ -133,9 +133,10 @@ cat::CatBackend::CatBackend(bool debug)
   const kinematic_model::KinematicModelConstPtr model = planning_scene_monitor_->getKinematicModel();
   if(!model)
     ROS_ERROR("The model is broken!");
-  ompl_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel()));
+  ompl_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
+                                                                        "ompl/planning_plugin", "ompl/request_adapters"));
   cat_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
-                                                              "cat_planning_plugin", "cat_request_adapters"));
+                                                                       "cat/planning_plugin", "cat/request_adapters"));
   if (debug)
   {
     ROS_INFO("CAT backend: Configuring planners in debug mode");
@@ -409,7 +410,7 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
     // lock the planning scene in this scope
     planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
     ROS_DEBUG_NAMED("cat_backend", "Issuing planning request.");
-    solved = cat_planning_pipeline_->generatePlan(planning_scene_monitor_->getPlanningScene(), req, res);
+    solved = pipeline->generatePlan(planning_scene_monitor_->getPlanningScene(), req, res);
   }
   catch(std::runtime_error &ex)
   {

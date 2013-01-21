@@ -6,8 +6,8 @@
   
   <arg name="planning_adapters" value="default_planner_request_adapters/AddTimeParameterization" />
 
-  <param name="cat_planning_plugin" value="$(arg planning_plugin)" />
-  <param name="cat_request_adapters" value="$(arg planning_adapters)" />
+  <param name="planning_plugin" value="$(arg planning_plugin)" />
+  <param name="request_adapters" value="$(arg planning_adapters)" />
 
   <!-- <param name="start_state_max_bounds_error" value="0.1" /> -->
 
