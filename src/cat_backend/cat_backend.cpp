@@ -53,9 +53,9 @@ private:
 
   void dynamicReconfigureCallback(cat_backend::BackendConfig &config, uint32_t level)
   {
-    // do some stuff
-    //ROS_ERROR("Dynamic reconfigure callback has not been implemented, but we are just copying the default configuration!");
+    cat_backend::BackendConfig old_config = owner_->config_ ;
     owner_->config_ = config;
+
     if(level == 1)
       owner_->changedPlanningGroup();
 
@@ -71,6 +71,27 @@ private:
     if(level == 16)
     {
       ROS_INFO("Teleop mode changed to %s", owner_->modeToStr(owner_->config_.teleop_mode).c_str());
+      if(old_config.teleop_mode != cat_backend::Backend_TELEOP_JT && config.teleop_mode == cat_backend::Backend_TELEOP_JT)
+      {
+        // Switch to JT controller
+        if(owner_->trajectory_execution_manager_)
+        {
+          std::vector<std::string> list;
+          owner_->trajectory_execution_manager_->getControllerManager()->getControllersList(list);
+          for(int i = 0; i < list.size(); i++) ROS_INFO("Listed controller: %s", list[i].c_str());
+          list.clear();
+          owner_->trajectory_execution_manager_->getControllerManager()->getLoadedControllers(list);
+          for(int i = 0; i < list.size(); i++) ROS_INFO("Loaded controller: %s", list[i].c_str());
+          list.clear();
+          owner_->trajectory_execution_manager_->getControllerManager()->getActiveControllers(list);
+          for(int i = 0; i < list.size(); i++) ROS_INFO("Active controller: %s", list[i].c_str());
+          list.clear();
+        }
+      }
+      if(old_config.teleop_mode == cat_backend::Backend_TELEOP_JT && config.teleop_mode != cat_backend::Backend_TELEOP_JT)
+      {
+        // Switch to Joint Controller
+      }
       if(owner_->config_.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
         owner_->addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, owner_));
     }
@@ -94,23 +115,30 @@ cat::CatBackend::CatBackend(bool debug)
   background_process_.setCompletionEvent(boost::bind(&CatBackend::backgroundJobCompleted, this));
 
   // ===== Planning Scene =====
+  ROS_INFO("CAT backend: Initializing planning scene monitor");
   tfl_.reset(new tf::TransformListener());
-  planning_scene_monitor_.reset(new planning_scene_monitor::PlanningSceneMonitor(move_group::ROBOT_DESCRIPTION, tfl_));
+  std::string robot_description_name;
+  node_handle_.param("robot_description_name", robot_description_name, std::string("robot_description"));
+  planning_scene_monitor_.reset(new planning_scene_monitor::PlanningSceneMonitor(robot_description_name, tfl_));
   if (planning_scene_monitor_->getPlanningScene() && planning_scene_monitor_->getPlanningScene()->isConfigured())
   {
-    ROS_INFO("Starting world, scene, and state monitor.");
     planning_scene_monitor_->startWorldGeometryMonitor();
-    planning_scene_monitor_->startSceneMonitor();
+    //planning_scene_monitor_->startSceneMonitor();
     planning_scene_monitor_->startStateMonitor();
     planning_scene_monitor_->startPublishingPlanningScene(planning_scene_monitor_->UPDATE_SCENE);
   }
 
   // ===== Planning =====
+  ROS_INFO("CAT backend: Initializing planning pipelines");
+  const kinematic_model::KinematicModelConstPtr model = planning_scene_monitor_->getKinematicModel();
+  if(!model)
+    ROS_ERROR("The model is broken!");
   ompl_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel()));
   cat_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
                                                               "cat_planning_plugin", "cat_request_adapters"));
   if (debug)
   {
+    ROS_INFO("CAT backend: Configuring planners in debug mode");
     ompl_planning_pipeline_->publishReceivedRequests(true);
     ompl_planning_pipeline_->displayComputedMotionPlans(true);
     ompl_planning_pipeline_->checkSolutionPaths(true);
@@ -120,10 +148,12 @@ cat::CatBackend::CatBackend(bool debug)
   node_handle_.param("allow_trajectory_execution", allow_trajectory_execution_, true);
   if (allow_trajectory_execution_)
   {
+    ROS_INFO("CAT backend: Initializing trajectory execution manager");
     trajectory_execution_manager_.reset(new trajectory_execution_manager::TrajectoryExecutionManager(planning_scene_monitor_->getKinematicModel()));
   }
 
   // ===== Visualization =====
+  ROS_INFO("CAT backend: Initializing robot interaction tools");
   publish_goal_state_ = root_node_handle_.advertise<moveit_msgs::PlanningScene>("goal_state_scene", 1);
   robot_interaction_.reset(new robot_interaction::RobotInteraction(getKinematicModel(), "cat_backend"));
   kinematic_state::KinematicStatePtr ks(new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
