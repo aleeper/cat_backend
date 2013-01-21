@@ -218,6 +218,10 @@ protected: // methods
   void computeTeleopIKUpdate(const ros::Duration& target_period);
   void computeTeleopMPUpdate(const ros::Duration& target_period);
   void computeTeleopCVXUpdate(const ros::Duration& target_period);
+  bool generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
+                    moveit_msgs::MotionPlanRequest& req,
+                    moveit_msgs::MotionPlanResponse &res,
+                    const ros::Time& future_time_limit);
 
   void setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz);
 
@@ -263,16 +267,6 @@ protected: // methods
 
 protected: // members
 
-  // For drawing the robot...
-  //KinematicStateVisualizationPtr query_robot_start_;                  ///< Handles drawing the robot at the start configuration
-  //KinematicStateVisualizationPtr query_robot_goal_;                   ///< Handles drawing the robot at the goal configuration
-  //KinematicStateVisualizationPtr display_path_robot_;                 ///< Handles actually drawing the robot along motion plans
-
-  // Maybe useful.
-  //bool animating_path_;
-  //int current_state_;
-  //float current_state_time_;
-
   // robot interaction
   robot_interaction::RobotInteractionPtr robot_interaction_;
 //  robot_interaction::RobotInteraction::InteractionHandlerPtr query_start_state_;
@@ -287,27 +281,18 @@ protected: // members
   ros::NodeHandle root_node_handle_;
   ros::NodeHandle node_handle_;
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
-  plan_execution::PlanExecutionPtr plan_execution_;
+  trajectory_execution_manager::TrajectoryExecutionManagerPtr trajectory_execution_manager_;
+//  plan_execution::PlanExecutionPtr plan_execution_;
+  planning_pipeline::PlanningPipelinePtr ompl_planning_pipeline_;
   planning_pipeline::PlanningPipelinePtr cat_planning_pipeline_;
-  pick_place::PickPlacePtr pick_place_;
+//  pick_place::PickPlacePtr pick_place_;
   bool allow_trajectory_execution_;
-
-//  boost::scoped_ptr<actionlib::SimpleActionServer<moveit_msgs::MoveGroupAction> > move_action_server_;
-//  moveit_msgs::MoveGroupFeedback move_feedback_;
-
-//  boost::scoped_ptr<actionlib::SimpleActionServer<moveit_msgs::PickupAction> > pickup_action_server_;
-//  moveit_msgs::PickupFeedback pickup_feedback_;
-
-//  ros::ServiceServer plan_service_;
-//  ros::ServiceServer execute_service_;
-//  ros::ServiceServer query_service_;
 
   //ros::Publisher publish_start_state_;
   ros::Publisher publish_goal_state_;
   ros::Publisher publish_current_state_;
 
   //boost::shared_ptr<move_group_interface::MoveGroup::Plan> current_plan_;
-
 
   BackgroundProcessing background_process_;
   std::deque<boost::function<void(void)> > main_loop_jobs_;
