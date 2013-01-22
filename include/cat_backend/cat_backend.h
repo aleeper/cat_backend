@@ -62,7 +62,7 @@ namespace cat
 class PlanningStateInterpolator
 {
 public:
-  PlanningStateInterpolator() : has_new_plan_(false) {}
+  PlanningStateInterpolator() : has_new_plan_(false), plan_is_valid_(false) {}
   ~PlanningStateInterpolator(){}
 
   void findIndexAtTimeFromStart(const ros::Duration& time, int& before, int& after, double &interpolate)
@@ -95,7 +95,7 @@ public:
   void getStateAtTime(const ros::Time &request_time, kinematic_state::KinematicStatePtr& start_state,
                                          moveit_msgs::RobotState& rs)
   {
-    if(current_plan_ && current_plan_->trajectory_.joint_trajectory.points.size() >= 2)
+    if(plan_is_valid_ && current_plan_ && current_plan_->trajectory_.joint_trajectory.points.size() >= 2)
     {
       ros::Time plan_start_time = current_plan_->trajectory_.joint_trajectory.header.stamp;
       ros::Duration diff_time = request_time - plan_start_time;
@@ -159,10 +159,17 @@ public:
     }
   }
 
+  void clearPlan()
+  {
+    has_new_plan_ = false;
+    plan_is_valid_ = false;
+  }
+
   void setPlan(const move_group_interface::MoveGroup::Plan& plan)
   {
-    has_new_plan_ = true;
     current_plan_.reset( new move_group_interface::MoveGroup::Plan(plan));
+    has_new_plan_ = true;
+    plan_is_valid_ = true;
   }
 
   bool hasNewPlan()
@@ -181,6 +188,7 @@ public:
   }
 
   bool has_new_plan_;
+  bool plan_is_valid_;
   boost::shared_ptr<move_group_interface::MoveGroup::Plan> current_plan_;
 };
 
@@ -233,10 +241,10 @@ protected: // methods
 //    return query_start_state_->getState();
 //  }
 
-  const kinematic_state::KinematicStatePtr& getQueryGoalState(void) const
-  {
-    return query_goal_state_->getState();
-  }
+//  const kinematic_state::KinematicStateConstPtr& getQueryGoalState(void) const
+//  {
+//    return query_goal_state_->getState();
+//  }
 
   const robot_interaction::RobotInteractionPtr& getRobotInteraction(void) const
   {
@@ -269,12 +277,8 @@ protected: // members
 
   // robot interaction
   robot_interaction::RobotInteractionPtr robot_interaction_;
-//  robot_interaction::RobotInteraction::InteractionHandlerPtr query_start_state_;
   robot_interaction::RobotInteraction::InteractionHandlerPtr query_goal_state_;
-  robot_interaction::RobotInteraction::InteractionHandlerPtr last_goal_state_;
-  // I don't know what these are for yet.
-  //std::map<std::string, int> collision_links_start_;
-  //std::map<std::string, int> collision_links_goal_;
+  kinematic_state::KinematicStatePtr last_goal_state_;
 
   boost::shared_ptr<tf::TransformListener> tfl_;
 
@@ -282,17 +286,14 @@ protected: // members
   ros::NodeHandle node_handle_;
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
   trajectory_execution_manager::TrajectoryExecutionManagerPtr trajectory_execution_manager_;
-//  plan_execution::PlanExecutionPtr plan_execution_;
   planning_pipeline::PlanningPipelinePtr ompl_planning_pipeline_;
   planning_pipeline::PlanningPipelinePtr cat_planning_pipeline_;
-//  pick_place::PickPlacePtr pick_place_;
   bool allow_trajectory_execution_;
 
-  //ros::Publisher publish_start_state_;
   ros::Publisher publish_goal_state_;
   ros::Publisher publish_current_state_;
-
-  //boost::shared_ptr<move_group_interface::MoveGroup::Plan> current_plan_;
+  ros::Publisher publish_cartesian_goal_left_;
+  ros::Publisher publish_cartesian_goal_right_;
 
   BackgroundProcessing background_process_;
   std::deque<boost::function<void(void)> > main_loop_jobs_;

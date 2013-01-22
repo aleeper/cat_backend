@@ -15,6 +15,9 @@
   <arg name="allow_trajectory_execution" default="true"/>
   <arg name="max_safe_path_cost" default="1"/>
 
+  <include file="$(find cat_backend)/launch/c_jt.launch" >
+  </include>
+
   <include unless="$(arg prj)" file="$(find cat_backend)/launch/planning_context.launch" >
     <arg name="load_robot_description" value="$(arg load_robot_description)" />
   </include>
