@@ -123,7 +123,7 @@ cat::CatBackend::CatBackend(bool debug)
   if (planning_scene_monitor_->getPlanningScene() && planning_scene_monitor_->getPlanningScene()->isConfigured())
   {
     planning_scene_monitor_->startWorldGeometryMonitor();
-    //planning_scene_monitor_->startSceneMonitor();
+    planning_scene_monitor_->startSceneMonitor();
     planning_scene_monitor_->startStateMonitor();
     planning_scene_monitor_->startPublishingPlanningScene(planning_scene_monitor_->UPDATE_SCENE);
   }
@@ -137,6 +137,8 @@ cat::CatBackend::CatBackend(bool debug)
                                                                         "ompl/planning_plugin", "ompl/request_adapters"));
   cat_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
                                                                        "cat/planning_plugin", "cat/request_adapters"));
+  cat_planning_pipeline_->checkSolutionPaths(false);
+
   if (debug)
   {
     ROS_INFO("CAT backend: Configuring planners in debug mode");
