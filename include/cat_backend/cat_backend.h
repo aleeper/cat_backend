@@ -112,7 +112,7 @@ public:
       int before=0, after=0;
       double interpolate = 1.0;
       findIndexAtTimeFromStart(diff_time, before, after, interpolate);
-      ROS_INFO("Using indices %d and %d with interpolation %.3f.", before, after, interpolate);
+      ROS_DEBUG("Using indices %d and %d with interpolation %.3f.", before, after, interpolate);
       const trajectory_msgs::JointTrajectoryPoint& point_before = current_plan_->trajectory_.joint_trajectory.points[before];
       const trajectory_msgs::JointTrajectoryPoint& point_after = current_plan_->trajectory_.joint_trajectory.points[after];
       const std::vector<std::string>& joint_names = current_plan_->trajectory_.joint_trajectory.joint_names;
@@ -126,7 +126,7 @@ public:
 
       if(point_after.velocities.size() == joint_names.size())
       {
-        logInform("Cat backend has velocity data; populating...");
+        ROS_DEBUG("Cat backend has velocity data; populating...");
         for(int i=0; i < point_after.velocities.size(); i++)
         {
           velocity_map[joint_names[i]] = (point_after.velocities[i] - point_before.velocities[i])*interpolate + point_before.velocities[i];
@@ -153,7 +153,7 @@ public:
     }
     else
     {
-      ROS_WARN("No stored plan, just returning input state...");
+      ROS_DEBUG("No stored plan, just returning input state...");
       kinematic_state::kinematicStateToRobotState(*start_state, rs);
       rs.joint_state.header.stamp = ros::Time(0);
     }
@@ -221,7 +221,7 @@ protected: // methods
   void updateBackgroundJobProgressBar(void);
   void backgroundJobCompleted(void);
 
-  void computeTeleopUpdate();
+  void computeTeleopUpdate(const ros::Duration& target_period);
   void computeTeleopJTUpdate(const ros::Duration& target_period);
   void computeTeleopIKUpdate(const ros::Duration& target_period);
   void computeTeleopMPUpdate(const ros::Duration& target_period);
@@ -229,7 +229,7 @@ protected: // methods
   bool generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
                     moveit_msgs::MotionPlanRequest& req,
                     moveit_msgs::MotionPlanResponse &res,
-                    const ros::Time& future_time_limit);
+                    const ros::Time& future_time_limit);  
 
   void setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz);
 
@@ -268,6 +268,9 @@ protected: // methods
 //  void updateQueryGoalState(void);
 
   void onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih, bool needs_refresh);
+
+  void setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state);
+
   void updateInactiveGroupsFromCurrentRobot();
 
   std::string getCurrentPlanningGroup(void) const;

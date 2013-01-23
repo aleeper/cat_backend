@@ -37,6 +37,77 @@
 #include <tf_conversions/tf_eigen.h>
 #include <eigen_conversions/eigen_msg.h>
 
+namespace{
+
+void positionAndAngleDist(Eigen::Affine3d start, Eigen::Affine3d end,
+                                              double &pos_dist,
+double &angle, Eigen::Vector3d &axis, Eigen::Vector3d &direction)
+{
+  //trans = end to start = global to start * end to global
+  Eigen::Affine3d trans;
+  trans = start.inverse() * end;
+  Eigen::AngleAxis<double> angle_axis;
+  angle_axis = trans.rotation();
+  angle = angle_axis.angle();
+  axis = angle_axis.axis();
+  if(angle > M_PI)
+  {
+    angle = -(angle - 2*M_PI);
+    axis = -axis;
+  }
+  direction = trans.translation();
+  pos_dist = sqrt(direction.dot(direction));
+  if(pos_dist) direction *= 1/pos_dist;
+}
+
+// Stolen wholesale from object_manipulator::MechanismInterface
+geometry_msgs::PoseStamped clipDesiredPose(const geometry_msgs::PoseStamped &current_pose,
+                                           const geometry_msgs::PoseStamped &desired_pose,
+                                           double clip_dist, double clip_angle,
+                                           double &resulting_clip_fraction)
+{
+  //no clipping desired
+  if(clip_dist == 0 && clip_angle == 0) return desired_pose;
+
+  //Get the position and angle dists between current and desired
+  Eigen::Affine3d current_trans, desired_trans;
+  double pos_dist, angle;
+  Eigen::Vector3d axis, direction;
+  tf::poseMsgToEigen(current_pose.pose, current_trans);
+  tf::poseMsgToEigen(desired_pose.pose, desired_trans);
+  positionAndAngleDist(current_trans, desired_trans, pos_dist, angle, axis, direction);
+
+  //Clip the desired pose to be at most clip_dist and the desired angle to be at most clip_angle (proportional)
+  //from the current
+  double pos_mult, angle_mult;
+  double pos_change, angle_change;
+  angle_mult = fabs(angle / clip_angle);
+  pos_mult = fabs(pos_dist / clip_dist);
+  if(pos_mult <=1 && angle_mult <=1){
+    return desired_pose;
+  }
+  double mult = pos_mult;
+  if(angle_mult > pos_mult) mult = angle_mult;
+  pos_change = pos_dist / mult;
+  angle_change = angle / mult;
+  resulting_clip_fraction = 1 / mult;
+
+  Eigen::Affine3d clipped_trans;
+  clipped_trans = current_trans;
+  Eigen::Vector3d scaled_direction;
+  scaled_direction = direction * pos_change;
+  Eigen::Translation3d translation(scaled_direction);
+  clipped_trans = clipped_trans * translation;
+  Eigen::AngleAxis<double> angle_axis(angle_change, axis);
+  clipped_trans = clipped_trans * angle_axis;
+  geometry_msgs::PoseStamped clipped_pose;
+  tf::poseEigenToMsg(clipped_trans, clipped_pose.pose);
+  clipped_pose.header = desired_pose.header;
+  return clipped_pose;
+}
+
+}
+
 
 namespace cat {
 
@@ -98,7 +169,7 @@ private:
         owner_->trajectory_execution_manager_->getControllerManager()->switchControllers(joint_controllers, cartesian_controllers);
       }
       if(owner_->config_.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
-        owner_->addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, owner_));
+        owner_->addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, owner_, ros::Duration(config.target_period)));
     }
   }
 
@@ -223,10 +294,10 @@ void cat::CatBackend::addBackgroundJob(const boost::function<void(void)> &job)
   //addMainLoopJob(boost::bind(&MotionPlanningDisplay::updateBackgroundJobProgressBar, this));
 }
 
-void cat::CatBackend::computeTeleopUpdate()
+void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
 {
   ROS_DEBUG("v v v v v v v v v v v v v v v v v v v v v v v v v v v v v v v v v");
-  ros::Duration target_period = ros::Duration(config_.target_period);
+  //ros::Duration target_period = ros::Duration(config_.target_period);
   ros::Time update_start_time = ros::Time::now();
 
   //planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
@@ -260,19 +331,35 @@ void cat::CatBackend::computeTeleopUpdate()
   }
 
   ros::Duration time_used = ros::Time::now() - update_start_time;
-  ros::Duration remaining_time = target_period - time_used;
+  ros::Duration remaining_time = target_period - time_used - ros::Duration(0.001); // TODO magic number!
+  ros::Duration next_cycle_allowed_time(config_.target_period); // default
   if(remaining_time.toSec() < 0.0)
   {
     remaining_time = ros::Duration(0.0);
+    next_cycle_allowed_time.fromSec( target_period.toSec() * config_.growth_factor );
     ROS_ERROR("Time used: %.3f sec exceeded target period (%.3f sec)", time_used.toSec(), target_period.toSec());
   }
   else
-    ROS_INFO("Time used: %.3f sec, sleeping for %.3f sec", time_used.toSec(), remaining_time.toSec());
-  remaining_time.sleep();
+  {
+    double time = std::max<double>( config_.target_period,
+                                    target_period.toSec() - config_.shrink_factor*remaining_time.toSec());
+    next_cycle_allowed_time.fromSec( time );
+    if (config_.sleep_remainder)
+    {
+      ROS_INFO("Time used: %.3f sec, sleeping for %.3f sec, next cycle target is %.3f sec",
+               time_used.toSec(), remaining_time.toSec(), next_cycle_allowed_time.toSec());
+      remaining_time.sleep();
+    }
+    else
+      ROS_INFO("Time used: %.3f sec of %.3f sec allowed (%.1f %%), next cycle target is %.3f",
+               time_used.toSec(), target_period.toSec(),
+              time_used.toSec()/ target_period.toSec()*100.0,
+               next_cycle_allowed_time.toSec());
+  }
 
   // When all is done, it gets ready to call itself again!
   if(config_.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
-    addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, this));
+    addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, this, next_cycle_allowed_time));
 }
 
 // =============================================================================
@@ -343,6 +430,12 @@ void cat::CatBackend::computeTeleopJTUpdate(const ros::Duration &target_period)
     // TODO clip the commanded pose!
     geometry_msgs::PoseStamped goal_pose;
     getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[i], goal_pose);
+    geometry_msgs::PoseStamped current_pose;
+    tf::poseEigenToMsg(getPlanningSceneRO()->getCurrentState().getLinkState(aee[i].parent_link)->getGlobalLinkTransform(), current_pose.pose);
+    double linear_clip = 2;
+    double angle_clip = 10;
+    double clip_fraction = 0;
+    goal_pose = clipDesiredPose(current_pose, goal_pose, linear_clip*target_period.toSec(), angle_clip * target_period.toSec(), clip_fraction );
     goal_pose.header.stamp = ros::Time(0);
     if(aee[i].parent_link == "r_wrist_roll_link")
       publish_cartesian_goal_right_.publish(goal_pose);
@@ -503,15 +596,9 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
     in_error = ih->inError(aee[i]) || in_error;
   }
 
-  moveit_msgs::PlanningScene gs;
   if(!in_error)
   {
-    ROS_DEBUG("Saving new last_goal_state");
-    last_goal_state_lock_.lock();
-    *last_goal_state_ = *query_goal_state_->getState();
-    kinematic_state::kinematicStateToRobotState(*last_goal_state_, gs.robot_state);
-    last_goal_state_lock_.unlock();
-    publish_goal_state_.publish(gs);
+    setAndPublishLastGoalState(query_goal_state_->getState());
   }
   else
   {
@@ -542,6 +629,17 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
     robot_interaction_->addInteractiveMarkers(getQueryGoalStateHandler());
     robot_interaction_->publishInteractiveMarkers();
   }
+}
+
+void cat::CatBackend::setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state)
+{
+  ROS_DEBUG("Saving new last_goal_state");
+  moveit_msgs::PlanningScene gs;
+  last_goal_state_lock_.lock();
+  *last_goal_state_ = *state;
+  kinematic_state::kinematicStateToRobotState(*last_goal_state_, gs.robot_state);
+  last_goal_state_lock_.unlock();
+  publish_goal_state_.publish(gs);
 }
 
 void cat::CatBackend::publishErrorMetrics()
@@ -621,7 +719,7 @@ void cat::CatBackend::changedPlanningGroup(void)
   if (robot_interaction_)
   {
     ROS_INFO("Changing to group [%s]", group.c_str());
-    query_goal_state_->clearAllPoseOffsets();
+    query_goal_state_->clearPoseOffsets();
     robot_interaction_->decideActiveComponents(group);
 
     // Set offsets
@@ -637,6 +735,10 @@ void cat::CatBackend::changedPlanningGroup(void)
         query_goal_state_->setPoseOffset(aeef[i], offset);
       }
     }
+
+    // Set query to current state to help with IK seed.
+    query_goal_state_->setState(getPlanningSceneRO()->getCurrentState());
+    setAndPublishLastGoalState(query_goal_state_->getState());
 
     query_goal_state_->setControlsVisible(config_.show_controls);
     // Renew markers
