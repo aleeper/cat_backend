@@ -33,6 +33,9 @@
 #include "moveit/kinematic_state/conversions.h"
 #include <moveit/robot_interaction/robot_interaction.h>
 #include <moveit/kinematic_constraints/utils.h>
+#include <std_msgs/Float64.h>
+#include <tf_conversions/tf_eigen.h>
+#include <eigen_conversions/eigen_msg.h>
 
 
 namespace cat {
@@ -161,12 +164,12 @@ cat::CatBackend::CatBackend(bool debug)
 
   // ===== Visualization =====
   ROS_INFO("CAT backend: Initializing robot interaction tools");
-  publish_goal_state_ = root_node_handle_.advertise<moveit_msgs::PlanningScene>("goal_state_scene", 1);
+  publish_goal_state_ = node_handle_.advertise<moveit_msgs::PlanningScene>("goal_state_scene", 1);
   robot_interaction_.reset(new robot_interaction::RobotInteraction(getKinematicModel(), "cat_backend"));
   kinematic_state::KinematicStatePtr ks(new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
   last_goal_state_.reset(new kinematic_state::KinematicState(*ks));
   query_goal_state_.reset(new robot_interaction::RobotInteraction::InteractionHandler("goal", *ks, planning_scene_monitor_->getTFClient()));
-  query_goal_state_->setUpdateCallback(boost::bind(&CatBackend::onQueryGoalStateUpdate, this, _1));
+  query_goal_state_->setUpdateCallback(boost::bind(&CatBackend::onQueryGoalStateUpdate, this, _1, _2));
   query_goal_state_->setStateValidityCallback(boost::bind(&CatBackend::isIKSolutionCollisionFree, this, _1, _2));
   query_goal_state_->setMeshesVisible(true);
   query_goal_state_->setIKAttempts(config_.ik_attempts);
@@ -175,9 +178,13 @@ cat::CatBackend::CatBackend(bool debug)
                                            robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
                                          : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
 
+  // ===== Visualization =====
+  publish_error_ = node_handle_.advertise<std_msgs::Float64>("metrics/error_magnitude", 10);
+
   // Now we actually go...
+  ROS_INFO("CAT backend configuring intial planning group");
   changedPlanningGroup();
-  ROS_DEBUG("CAT backend initialized!");
+  ROS_INFO("CAT backend initialized!");
 }
 
 cat::CatBackend::~CatBackend(void)
@@ -486,7 +493,7 @@ void cat::CatBackend::setWorkspace(double minx, double miny, double minz, double
   workspace_parameters_.max_corner.z = maxz;
 }
 
-void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih)
+void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih, bool needs_refresh)
 {
   ROS_DEBUG("Processing a query goal update.");
   const std::vector<robot_interaction::RobotInteraction::EndEffector>& aee = robot_interaction_->getActiveEndEffectors();
@@ -512,10 +519,34 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
   }
   updateInactiveGroupsFromCurrentRobot();
 
+  for(int i=0; i < aee.size(); i++)
+  {
+    const robot_interaction::RobotInteraction::EndEffector& eef = aee[0]; // only handle the first one...
+    tf::Pose link_pose, goal_pose;
+    geometry_msgs::PoseStamped goal_pose_msg;
+    query_goal_state_->getLastEndEffectorMarkerPose(eef, goal_pose_msg);
+    tf::poseMsgToTF(goal_pose_msg.pose, goal_pose);
+    tf::poseEigenToTF(getPlanningSceneRO()->getCurrentState().getLinkState(eef.parent_link)->getGlobalLinkTransform(), link_pose);
+    tf::Vector3 trans_error = link_pose.getOrigin() - goal_pose.getOrigin();
+    double distance = trans_error.length();
+    double angle = link_pose.getRotation().angleShortestPath(goal_pose.getRotation());
+    std_msgs::Float64 msg;
+    msg.data = distance; // just use distance for now
+    publish_error_.publish(msg);
+  }
+
   // Update the markers
   ROS_DEBUG("Refreshing markers.");
-  robot_interaction_->addInteractiveMarkers(getQueryGoalStateHandler());
-  robot_interaction_->publishInteractiveMarkers();
+  if(needs_refresh)
+  {
+    robot_interaction_->addInteractiveMarkers(getQueryGoalStateHandler());
+    robot_interaction_->publishInteractiveMarkers();
+  }
+}
+
+void cat::CatBackend::publishErrorMetrics()
+{
+  ROS_ERROR("Publish error metrics doesn't do anything... do we need it?");
 }
 
 void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
@@ -590,7 +621,25 @@ void cat::CatBackend::changedPlanningGroup(void)
   if (robot_interaction_)
   {
     ROS_INFO("Changing to group [%s]", group.c_str());
+    query_goal_state_->clearAllPoseOffsets();
     robot_interaction_->decideActiveComponents(group);
+
+    // Set offsets
+    geometry_msgs::Pose offset;
+    offset.position.x = config_.offset_x;
+    offset.orientation.w = 1.0;
+    const std::vector<robot_interaction::RobotInteraction::EndEffector>& aeef = robot_interaction_->getActiveEndEffectors();
+    for(int i = 0; i < aeef.size(); i++)
+    {
+      if(aeef[i].eef_group.find("gripper") != std::string::npos)
+      {
+        ROS_DEBUG("Setting offset pose for end-effector [%s]", aeef[i].eef_group.c_str());
+        query_goal_state_->setPoseOffset(aeef[i], offset);
+      }
+    }
+
+    query_goal_state_->setControlsVisible(config_.show_controls);
+    // Renew markers
     clearAndRenewInteractiveMarkers();
   }
 }

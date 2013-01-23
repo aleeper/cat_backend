@@ -267,10 +267,13 @@ protected: // methods
 //  void updateQueryStartState(void);
 //  void updateQueryGoalState(void);
 
-  void onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih);
+  void onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih, bool needs_refresh);
   void updateInactiveGroupsFromCurrentRobot();
 
   std::string getCurrentPlanningGroup(void) const;
+
+protected:
+  void publishErrorMetrics();
 
 
 protected: // members
@@ -294,6 +297,9 @@ protected: // members
   ros::Publisher publish_current_state_;
   ros::Publisher publish_cartesian_goal_left_;
   ros::Publisher publish_cartesian_goal_right_;
+
+  ros::Publisher publish_error_;
+
 
   BackgroundProcessing background_process_;
   std::deque<boost::function<void(void)> > main_loop_jobs_;
