@@ -36,9 +36,16 @@
 #include <std_msgs/Float64.h>
 #include <tf_conversions/tf_eigen.h>
 #include <eigen_conversions/eigen_msg.h>
+#include <dynamic_reconfigure/server.h>
+#include <boost/thread.hpp>
+#include <boost/thread/mutex.hpp>
+#include <moveit/trajectory_processing/iterative_time_parameterization.h>
 
+
+// TODO get these out of here!!!
 namespace{
 
+// Stolen wholesale from object_manipulator::MechanismInterface
 void positionAndAngleDist(Eigen::Affine3d start, Eigen::Affine3d end,
                                               double &pos_dist,
 double &angle, Eigen::Vector3d &axis, Eigen::Vector3d &direction)
@@ -131,11 +138,25 @@ private:
 
   void dynamicReconfigureCallback(cat_backend::BackendConfig &config, uint32_t level)
   {
+    ROS_DEBUG("Dynamic reconfigure waiting for lock...");
+    boost::mutex::scoped_lock slock(owner_->teleop_lock_);
+    ROS_DEBUG("Dynamic reconfigure got lock!");
+
     cat_backend::BackendConfig old_config = owner_->config_ ;
     owner_->config_ = config;
 
-    if(level == 1)
+    if(level == cat_backend::Backend_INITIALIZE)
+    {
+      // Always want to set disabled on re-launch
+      ROS_INFO("Dynamic reconfigure is setting initial settings");
+      owner_->config_.teleop_mode = config.teleop_mode = cat_backend::Backend_TELEOP_DISABLE;
+    }
+
+    if(level == cat_backend::Backend_PLANNING_GROUP)
+    {
+      owner_->psi_.clearPlan();
       owner_->changedPlanningGroup();
+    }
 
     if(owner_->query_goal_state_)
     {
@@ -146,9 +167,15 @@ private:
                                              : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
     }
 
-    if(level == 16)
+    if(level == cat_backend::Backend_RESET_STATE)
     {
-      owner_->psi_.setPlanAsOld();
+      owner_->psi_.clearPlan();
+      owner_->changedPlanningGroup();
+    }
+
+    if(level == cat_backend::Backend_TELEOP_MODE)
+    {
+      owner_->psi_.clearPlan();
       std::vector<std::string> cartesian_controllers(2), joint_controllers(2);
       cartesian_controllers[0] = "r_cart";
       cartesian_controllers[1] = "l_cart";
@@ -168,7 +195,28 @@ private:
         // Switch to Joint Controller
         owner_->trajectory_execution_manager_->getControllerManager()->switchControllers(joint_controllers, cartesian_controllers);
       }
-      if(owner_->config_.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
+
+      switch(config.teleop_mode)
+      {
+      case cat_backend::Backend_TELEOP_JT:
+        owner_->config_.target_period = config.target_period = 0.015; // TODO magic number! (parameter?)
+        break;
+      case cat_backend::Backend_TELEOP_IK:
+        owner_->config_.target_period = config.target_period = 0.033; // TODO magic number! (parameter?)
+        break;
+      case cat_backend::Backend_TELEOP_MP:
+        owner_->config_.target_period = config.target_period = 0.3; // TODO magic number! (parameter?)
+        break;
+      case cat_backend::Backend_TELEOP_CVX:
+        owner_->config_.target_period = config.target_period = 0.033; // TODO magic number! (parameter?)
+        break;
+      default:
+        // do nothing
+        break;
+      }
+
+      if(old_config.teleop_mode == cat_backend::Backend_TELEOP_DISABLE &&
+         config.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
         owner_->addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, owner_, ros::Duration(config.target_period)));
     }
   }
@@ -184,7 +232,8 @@ private:
 cat::CatBackend::CatBackend(bool debug)
   :
     node_handle_("~"),
-    allow_trajectory_execution_(true)
+    allow_trajectory_execution_(true),
+    cycle_id_(0)
 {
   // ===== Dynamic Reconfigure houses some of the parameters used below =====
   reconfigure_impl_ = new DynamicReconfigureImpl(this);
@@ -203,6 +252,7 @@ cat::CatBackend::CatBackend(bool debug)
     planning_scene_monitor_->startStateMonitor();
     planning_scene_monitor_->startPublishingPlanningScene(planning_scene_monitor_->UPDATE_SCENE);
   }
+  planning_scene_ = planning_scene::PlanningScene::clone(getPlanningSceneRO());
 
   // ===== Planning =====
   ROS_INFO("CAT backend: Initializing planning pipelines");
@@ -235,10 +285,12 @@ cat::CatBackend::CatBackend(bool debug)
 
   // ===== Visualization =====
   ROS_INFO("CAT backend: Initializing robot interaction tools");
-  publish_goal_state_ = node_handle_.advertise<moveit_msgs::PlanningScene>("goal_state_scene", 1);
+  publish_goal_state_ = node_handle_.advertise<moveit_msgs::PlanningScene>("goal_state_robot", 1);
+  publish_current_state_ = node_handle_.advertise<moveit_msgs::PlanningScene>("current_state_robot", 1);
   robot_interaction_.reset(new robot_interaction::RobotInteraction(getKinematicModel(), "cat_backend"));
   kinematic_state::KinematicStatePtr ks(new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
   last_goal_state_.reset(new kinematic_state::KinematicState(*ks));
+  last_current_state_.reset(new kinematic_state::KinematicState(*ks));
   query_goal_state_.reset(new robot_interaction::RobotInteraction::InteractionHandler("goal", *ks, planning_scene_monitor_->getTFClient()));
   query_goal_state_->setUpdateCallback(boost::bind(&CatBackend::onQueryGoalStateUpdate, this, _1, _2));
   query_goal_state_->setStateValidityCallback(boost::bind(&CatBackend::isIKSolutionCollisionFree, this, _1, _2));
@@ -260,7 +312,8 @@ cat::CatBackend::CatBackend(bool debug)
 
 cat::CatBackend::~CatBackend(void)
 {
-  // Nothing
+  if(reconfigure_impl_)
+    delete reconfigure_impl_;
 }
 
 std::string cat::CatBackend::modeToStr(int mode)
@@ -296,11 +349,16 @@ void cat::CatBackend::addBackgroundJob(const boost::function<void(void)> &job)
 
 void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
 {
-  ROS_DEBUG("v v v v v v v v v v v v v v v v v v v v v v v v v v v v v v v v v");
-  //ros::Duration target_period = ros::Duration(config_.target_period);
-  ros::Time update_start_time = ros::Time::now();
+  ROS_DEBUG("Teleop update waiting for lock...");
+  //boost::mutex::scoped_lock slock(teleop_lock_);
+  teleop_lock_.lock();
+  ROS_DEBUG("Teleop update got lock! v v v v v v v v v v v v v v v v v v v v v");
 
-  //planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
+  planning_scene_ = planning_scene::PlanningScene::clone(getPlanningSceneRO());
+
+  ROS_DEBUG("Copied planning scene.");
+  ros::Time update_start_time = ros::Time::now();
+  cycle_id_ += 1;
 
   try
   {
@@ -320,6 +378,7 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
         break;
       case(cat_backend::Backend_TELEOP_DISABLE):
         ROS_WARN("It seems teleop was DISABLED sometime between the last queueing action and now!");
+        return;
         break;
       default:
         ROS_ERROR("An unhandled teleop state was requested.");
@@ -329,6 +388,7 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
   {
     ROS_ERROR("Caught some kind of exception...");
   }
+  teleop_lock_.unlock();
 
   ros::Duration time_used = ros::Time::now() - update_start_time;
   ros::Duration remaining_time = target_period - time_used - ros::Duration(0.001); // TODO magic number!
@@ -337,7 +397,8 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
   {
     remaining_time = ros::Duration(0.0);
     next_cycle_allowed_time.fromSec( target_period.toSec() * config_.growth_factor );
-    ROS_ERROR("Time used: %.3f sec exceeded target period (%.3f sec)", time_used.toSec(), target_period.toSec());
+    ROS_ERROR("Cycle [%d] Time used: %.3f sec exceeded target of %.3f sec. Next cycle target is %.3f",
+              cycle_id_, time_used.toSec(), target_period.toSec(), next_cycle_allowed_time.toSec());
   }
   else
   {
@@ -346,15 +407,16 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
     next_cycle_allowed_time.fromSec( time );
     if (config_.sleep_remainder)
     {
-      ROS_INFO("Time used: %.3f sec, sleeping for %.3f sec, next cycle target is %.3f sec",
-               time_used.toSec(), remaining_time.toSec(), next_cycle_allowed_time.toSec());
+      ROS_INFO("Cycle [%d] Time used: %.3f sec, sleeping for %.3f sec, next cycle target is %.3f sec",
+               cycle_id_, time_used.toSec(), remaining_time.toSec(), next_cycle_allowed_time.toSec());
       remaining_time.sleep();
     }
     else
-      ROS_INFO("Time used: %.3f sec of %.3f sec allowed (%.1f %%), next cycle target is %.3f",
-               time_used.toSec(), target_period.toSec(),
+      ROS_INFO("Cycle [%d] Time used: %.3f sec of %.3f sec allowed (%.1f %%), next cycle target is %.3f",
+              cycle_id_,
+              time_used.toSec(), target_period.toSec(),
               time_used.toSec()/ target_period.toSec()*100.0,
-               next_cycle_allowed_time.toSec());
+              next_cycle_allowed_time.toSec());
   }
 
   // When all is done, it gets ready to call itself again!
@@ -384,7 +446,7 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
     ROS_WARN("There are %zd active end-effectors, only handling the first one... (this will probably cause a crash in the planner)", aee.size());
 
   // TODO add an estimated velocity correction so that the arm moves smoothly!
-  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
+  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(planning_scene_->getCurrentState()));
 
   moveit_msgs::MotionPlanRequest req;
   geometry_msgs::PoseStamped goal_pose;
@@ -394,8 +456,8 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
   req.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(aee[0].parent_link, goal_pose));
 //    req.motion_plan_request.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(future_start_state->getJointStateGroup(group_name),
 //                                                                                                       .001, .001));
-  req.num_planning_attempts = config_.velocity_constraint_only + 1;
-  req.allowed_planning_time = target_period*0.5;  // TODO mgic number!
+  req.num_planning_attempts = 1;
+  req.allowed_planning_time = target_period*0.65;  // TODO mgic number!
 
   moveit_msgs::MotionPlanResponse res;
   generatePlan(cat_planning_pipeline_, req, res, future_time);
@@ -431,11 +493,11 @@ void cat::CatBackend::computeTeleopJTUpdate(const ros::Duration &target_period)
     geometry_msgs::PoseStamped goal_pose;
     getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[i], goal_pose);
     geometry_msgs::PoseStamped current_pose;
-    tf::poseEigenToMsg(getPlanningSceneRO()->getCurrentState().getLinkState(aee[i].parent_link)->getGlobalLinkTransform(), current_pose.pose);
-    double linear_clip = 2;
-    double angle_clip = 10;
+    tf::poseEigenToMsg(planning_scene_->getCurrentState().getLinkState(aee[i].parent_link)->getGlobalLinkTransform(), current_pose.pose);
+    double linear_clip = target_period.toSec()*config_.jt_linear_clip_ratio;
+    double angle_clip = target_period.toSec()*config_.jt_angle_clip_ratio;
     double clip_fraction = 0;
-    goal_pose = clipDesiredPose(current_pose, goal_pose, linear_clip*target_period.toSec(), angle_clip * target_period.toSec(), clip_fraction );
+    goal_pose = clipDesiredPose(current_pose, goal_pose, linear_clip, angle_clip, clip_fraction );
     goal_pose.header.stamp = ros::Time(0);
     if(aee[i].parent_link == "r_wrist_roll_link")
       publish_cartesian_goal_right_.publish(goal_pose);
@@ -453,35 +515,113 @@ void cat::CatBackend::computeTeleopJTUpdate(const ros::Duration &target_period)
 // ============================================================================
 void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
 {
+  ros::Time future_time = ros::Time::now() + target_period;
   ROS_DEBUG("TeleopIKUpdate!");
   std::string group_name = getCurrentPlanningGroup();
 
   if (group_name.empty())
     return;
 
+//  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(planning_scene_->getCurrentState()));
+//  moveit_msgs::RobotState start_state;
+//  psi_.getStateAtTime( future_time, future_start_state, start_state);
+//  std::vector<moveit_msgs::JointLimits> limits = future_start_state->getKinematicModel()->getJointModelGroup(group_name)->getVariableLimits();
+//  for(size_t i = 0; i < limits.size(); ++i)
+//  {
+//    moveit_msgs::JointLimits& l = limits[i];
+//    if(l.has_velocity_limits)
+//      l.max_velocity *= 2.0; // TODO magic number!
+//  }
+
+//  trajectory_msgs::JointTrajectory joint_trajectory;
+
+//  last_goal_state_lock_.lock();
+//  std::vector< const std::vector<kinematic_state::JointState*> * > states(2);
+//  states[0] = &(future_start_state->getJointStateGroup(group_name)->getJointStateVector());
+//  states[1] = &(last_goal_state_->getJointStateGroup(group_name)->getJointStateVector());
+//  if( states[0]->size() != states[1]->size() )
+//  {
+//    ROS_ERROR("Joint vectors not the same size! Start has %zd while goal has %zd joints.", states[0]->size(), states[1]->size());
+//    return;
+//  }
+//  joint_trajectory.joint_names.resize(states[0]->size());
+//  joint_trajectory.points.resize(2);
+//  joint_trajectory.header.frame_id = last_goal_state_->getKinematicModel()->getModelFrame();
+//  joint_trajectory.header.stamp = start_state.joint_state.header.stamp;
+
+//  for(size_t i = 0; i < states.size(); ++i)
+//  {
+//    joint_trajectory.points[i].positions.resize(states[i]->size());
+//    joint_trajectory.points[i].velocities.resize(states[i]->size());
+
+//    // Now actually populate the joints...
+//    for(int j = 0; j < states[i]->size(); j++ )
+//    {
+//      kinematic_state::JointState* js = (*(states[i]))[j];
+//      joint_trajectory.joint_names[j] = js->getName();
+//      joint_trajectory.points[i].positions[j] = js->getVariableValues()[0];
+//      joint_trajectory.points[i].velocities[j] = 0.0;  // TODO could we estimate velocity?
+//    }
+//  }
+//  last_goal_state_lock_.unlock();
+//  smoother_.computeTimeStamps(joint_trajectory, limits, start_state);
+
+//  if(future_time < ros::Time::now() + ros::Duration(0.001)) // TODO this offset is a (vetted) magic number...
+//  {
+//    ROS_WARN("Planning took too long, discarding result.");
+//  }
+//  else
+//  {
+//    ROS_DEBUG("Planning SUCCESS, saving plan.");
+//    move_group_interface::MoveGroup::Plan plan;
+//    plan.trajectory_.joint_trajectory = joint_trajectory;
+//    plan.start_state_ = start_state;
+//    plan.trajectory_.joint_trajectory.header.stamp = future_time;
+//    psi_.setPlan(plan);
+//  }
+
+//  // Send out last plan for execution.
+//  // It is stamped with a time in the future, so it should be ok to send it now.
+//  if(psi_.hasNewPlan())
+//  {
+//    trajectory_execution_manager_->pushAndExecute(psi_.getPlan().trajectory_); // TODO should specify the controller huh?
+//    psi_.setPlanAsOld();
+//  }
+//  else
+//  {
+//    ROS_DEBUG("No plan saved, not executing anything.");
+//  }
+
+
+  last_goal_state_lock_.lock();
+
+  //double distance = planning_scene_->getCurrentState().distance(*last_goal_state_);
+
   moveit_msgs::RobotTrajectory traj;
   traj.joint_trajectory.points.resize(1);
-  traj.joint_trajectory.points[0].time_from_start = ros::Duration(target_period.toSec()*2);
-  {
-    last_goal_state_lock_.lock();
-    const std::vector<kinematic_state::JointState*>& jsv = last_goal_state_->getJointStateGroup(group_name)->getJointStateVector();
-    traj.joint_trajectory.joint_names.resize(jsv.size());
-    traj.joint_trajectory.points[0].positions.resize(jsv.size());
-    traj.joint_trajectory.points[0].velocities.resize(jsv.size());
-    traj.joint_trajectory.header.frame_id = last_goal_state_->getKinematicModel()->getModelFrame();
-    traj.joint_trajectory.header.stamp = ros::Time(0);
+  traj.joint_trajectory.points[0].time_from_start = ros::Duration(config_.ik_traj_time);
 
-    // Now actually populate the joints...
-    for(int i = 0; i < jsv.size(); i++ )
-    {
-      kinematic_state::JointState* js = jsv[i];
-      traj.joint_trajectory.joint_names[i] = js->getName();
-      traj.joint_trajectory.points[0].positions[i] = js->getVariableValues()[0];
-      traj.joint_trajectory.points[0].velocities[i] = 0.0;  // TODO could we estimate velocity?
-    }
-    last_goal_state_lock_.unlock();
+  const std::vector<kinematic_state::JointState*>& jsv = last_goal_state_->getJointStateGroup(group_name)->getJointStateVector();
+  traj.joint_trajectory.joint_names.resize(jsv.size());
+  traj.joint_trajectory.points[0].positions.resize(jsv.size());
+  traj.joint_trajectory.points[0].velocities.resize(jsv.size());
+  traj.joint_trajectory.header.frame_id = last_goal_state_->getKinematicModel()->getModelFrame();
+  traj.joint_trajectory.header.stamp = ros::Time(0);
+
+  // Now actually populate the joints...
+  for(int i = 0; i < jsv.size(); i++ )
+  {
+    kinematic_state::JointState* js = jsv[i];
+    traj.joint_trajectory.joint_names[i] = js->getName();
+    traj.joint_trajectory.points[0].positions[i] = js->getVariableValues()[0];
+    traj.joint_trajectory.points[0].velocities[i] = 0.0;  // TODO could we estimate velocity?
   }
+  last_goal_state_lock_.unlock();
+
+
   trajectory_execution_manager_->pushAndExecute(traj); // TODO should specify the controller huh?
+
+
   ROS_DEBUG("Done with TeleopIKUpdate");
 }
 
@@ -496,7 +636,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   if (group_name.empty())
     return;
 
-  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(getPlanningSceneRO()->getCurrentState()));
+  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(planning_scene_->getCurrentState()));
 
   ROS_DEBUG("Formulating planning request");
   moveit_msgs::MotionPlanRequest req;
@@ -538,9 +678,9 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
   try
   {
     // lock the planning scene in this scope
-    planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
+    //planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
     ROS_DEBUG_NAMED("cat_backend", "Issuing planning request.");
-    solved = pipeline->generatePlan(planning_scene_monitor_->getPlanningScene(), req, res);
+    solved = pipeline->generatePlan(planning_scene_, req, res);
   }
   catch(std::runtime_error &ex)
   {
@@ -604,6 +744,7 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
   {
     // Do nothing?
   }
+  setAndPublishLastCurrentState();
   updateInactiveGroupsFromCurrentRobot();
 
   for(int i=0; i < aee.size(); i++)
@@ -613,7 +754,7 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
     geometry_msgs::PoseStamped goal_pose_msg;
     query_goal_state_->getLastEndEffectorMarkerPose(eef, goal_pose_msg);
     tf::poseMsgToTF(goal_pose_msg.pose, goal_pose);
-    tf::poseEigenToTF(getPlanningSceneRO()->getCurrentState().getLinkState(eef.parent_link)->getGlobalLinkTransform(), link_pose);
+    tf::poseEigenToTF(last_current_state_->getLinkState(eef.parent_link)->getGlobalLinkTransform(), link_pose);
     tf::Vector3 trans_error = link_pose.getOrigin() - goal_pose.getOrigin();
     double distance = trans_error.length();
     double angle = link_pose.getRotation().angleShortestPath(goal_pose.getRotation());
@@ -633,13 +774,22 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
 
 void cat::CatBackend::setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state)
 {
+  boost::mutex::scoped_lock slock(last_goal_state_lock_);
   ROS_DEBUG("Saving new last_goal_state");
   moveit_msgs::PlanningScene gs;
-  last_goal_state_lock_.lock();
   *last_goal_state_ = *state;
   kinematic_state::kinematicStateToRobotState(*last_goal_state_, gs.robot_state);
-  last_goal_state_lock_.unlock();
   publish_goal_state_.publish(gs);
+}
+
+void cat::CatBackend::setAndPublishLastCurrentState()
+{
+  boost::mutex::scoped_lock slock(last_current_state_lock_);
+  ROS_DEBUG("Saving new last_current_state");
+  moveit_msgs::PlanningScene gs;
+  *last_current_state_ = getPlanningSceneRO()->getCurrentState();
+  kinematic_state::kinematicStateToRobotState(*last_current_state_, gs.robot_state);
+  publish_current_state_.publish(gs);
 }
 
 void cat::CatBackend::publishErrorMetrics()
@@ -650,8 +800,9 @@ void cat::CatBackend::publishErrorMetrics()
 void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
 {
   ROS_DEBUG("Updating inactive groups!");
-  kinematic_state::KinematicState new_state = getPlanningSceneRO()->getCurrentState();
-  const kinematic_state::JointStateGroup* jsg = query_goal_state_->getState()->getJointStateGroup(getCurrentPlanningGroup());
+  boost::mutex::scoped_lock slock(last_current_state_lock_);
+  kinematic_state::KinematicState new_state = *last_current_state_;
+    const kinematic_state::JointStateGroup* jsg = query_goal_state_->getState()->getJointStateGroup(getCurrentPlanningGroup());
   if(jsg)
   {
     //ROS_INFO("Setting values for group %s", jsg->getName().c_str());
@@ -720,6 +871,7 @@ void cat::CatBackend::changedPlanningGroup(void)
   {
     ROS_INFO("Changing to group [%s]", group.c_str());
     query_goal_state_->clearPoseOffsets();
+    query_goal_state_->clearSavedMarkerPoses();
     robot_interaction_->decideActiveComponents(group);
 
     // Set offsets

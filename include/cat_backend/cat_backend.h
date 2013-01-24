@@ -46,15 +46,15 @@
 //#include <moveit_msgs/ExecuteKnownTrajectory.h>
 //#include <moveit_msgs/QueryPlannerInterfaces.h>
 
+#include <moveit/trajectory_processing/iterative_time_parameterization.h>
+
+
 #include <tf/transform_listener.h>
 #include <moveit/plan_execution/plan_execution.h>
 #include <moveit/trajectory_processing/trajectory_tools.h>
 #include <moveit/pick_place/pick_place.h>
+#include <boost/thread/mutex.hpp>
 #include <ros/ros.h>
-
-#include <dynamic_reconfigure/server.h>
-
-
 
 namespace cat
 {
@@ -270,6 +270,7 @@ protected: // methods
   void onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih, bool needs_refresh);
 
   void setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state);
+  void setAndPublishLastCurrentState();
 
   void updateInactiveGroupsFromCurrentRobot();
 
@@ -285,12 +286,15 @@ protected: // members
   robot_interaction::RobotInteractionPtr robot_interaction_;
   robot_interaction::RobotInteraction::InteractionHandlerPtr query_goal_state_;
   kinematic_state::KinematicStatePtr last_goal_state_;
+  kinematic_state::KinematicStatePtr last_current_state_;
+
 
   boost::shared_ptr<tf::TransformListener> tfl_;
 
   ros::NodeHandle root_node_handle_;
   ros::NodeHandle node_handle_;
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
+  planning_scene::PlanningScenePtr planning_scene_;
   trajectory_execution_manager::TrajectoryExecutionManagerPtr trajectory_execution_manager_;
   planning_pipeline::PlanningPipelinePtr ompl_planning_pipeline_;
   planning_pipeline::PlanningPipelinePtr cat_planning_pipeline_;
@@ -308,8 +312,11 @@ protected: // members
   std::deque<boost::function<void(void)> > main_loop_jobs_;
   boost::mutex main_loop_jobs_lock_;
   boost::mutex last_goal_state_lock_;
+  boost::mutex last_current_state_lock_;
 
   PlanningStateInterpolator psi_;
+
+  trajectory_processing::IterativeParabolicTimeParameterization smoother_;
 
 
   moveit_msgs::WorkspaceParameters workspace_parameters_;
@@ -322,6 +329,9 @@ protected: // members
 
   cat_backend::BackendConfig config_;
 
+  boost::mutex teleop_lock_;
+
+  int cycle_id_;
 };
 
 
