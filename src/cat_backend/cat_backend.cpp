@@ -43,6 +43,9 @@
 
 
 // TODO get these out of here!!!
+// ====================================================================================================================
+// Convenience functions from object manipulator
+// ====================================================================================================================
 namespace{
 
 // Stolen wholesale from object_manipulator::MechanismInterface
@@ -116,6 +119,7 @@ geometry_msgs::PoseStamped clipDesiredPose(const geometry_msgs::PoseStamped &cur
 }
 
 // ====================================================================================================================
+// Planning State Interpolator
 // ====================================================================================================================
 
 void cat::PlanningStateInterpolator::findIndexAtTimeFromStart(const ros::Duration& time, int& before, int& after, double &interpolate)
@@ -225,6 +229,7 @@ void cat::PlanningStateInterpolator::printPlan()
 
 
 // ====================================================================================================================
+// Dynamic Reconfigure Implementation
 // ====================================================================================================================
 
 namespace cat {
@@ -329,7 +334,7 @@ private:
 
       if(old_config.teleop_mode == cat_backend::Backend_TELEOP_DISABLE &&
          config.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
-        owner_->addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, owner_, ros::Duration(config.target_period)));
+        owner_->addTeleopJob(boost::bind(&CatBackend::computeTeleopUpdate, owner_, ros::Duration(config.target_period)));
     }
   }
 
@@ -339,7 +344,9 @@ private:
 
 } // namespace cat
 
-// - - - - - - - - - - - - - - - - - - - - - - -  - - - - - - - - - - - - - - - - - - - - - -
+// ====================================================================================================================
+// CAT Backend
+// ====================================================================================================================
 
 cat::CatBackend::CatBackend(bool debug)
   :
@@ -349,7 +356,8 @@ cat::CatBackend::CatBackend(bool debug)
 {
   // ===== Dynamic Reconfigure houses some of the parameters used below =====
   reconfigure_impl_ = new DynamicReconfigureImpl(this);
-  background_process_.setCompletionEvent(boost::bind(&CatBackend::backgroundJobCompleted, this));
+  teleop_process_.setCompletionEvent(boost::bind(&CatBackend::backgroundJobCompleted, this));
+  //last_scene_update_time_ = ros::Time(0);
 
   // ===== Planning Scene =====
   ROS_INFO("CAT backend: Initializing planning scene monitor");
@@ -359,10 +367,21 @@ cat::CatBackend::CatBackend(bool debug)
   planning_scene_monitor_.reset(new planning_scene_monitor::PlanningSceneMonitor(robot_description_name, tfl_));
   if (planning_scene_monitor_->getPlanningScene() && planning_scene_monitor_->getPlanningScene()->isConfigured())
   {
-    planning_scene_monitor_->startWorldGeometryMonitor();
+    // External scenes (that we load?)
     planning_scene_monitor_->startSceneMonitor();
+
+    // World geometry and Octomap
+    planning_scene_monitor_->startWorldGeometryMonitor();
+    planning_scene_monitor_->addUpdateCallback(boost::bind(&CatBackend::onPlanningSceneMonitorUpdate, this, _1));
+
+    // Robot state
     planning_scene_monitor_->startStateMonitor();
+    planning_scene_monitor_->setStateUpdateFrequency(0.0); /// this disables updates
+    planning_scene_monitor_->getStateMonitor()->addUpdateCallback(boost::bind(&CatBackend::setAndPublishLastCurrentState, this, _1));
+
+    // Output
     planning_scene_monitor_->startPublishingPlanningScene(planning_scene_monitor_->UPDATE_SCENE);
+    planning_scene_monitor_->setPlanningScenePublishingFrequency(1);
   }
   planning_scene_ = planning_scene::PlanningScene::clone(getPlanningSceneRO());
 
@@ -410,8 +429,13 @@ cat::CatBackend::CatBackend(bool debug)
                                            robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
                                          : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
 
-  // ===== Visualization =====
+  // ===== Metrics =====
+  //timer_ = root_node_handle_.createTimer(ros::Duration(0.01), boost::bind(&CatBackend::timerCallback, this));
   publish_error_ = node_handle_.advertise<std_msgs::Float64>("metrics/error_magnitude", 10);
+
+  // ===== Get ready to go =====
+  //addPerceptionJob(boost::bind(&CatBackend::updatePlanningScene, this));
+
 
   // Now we actually go...
   ROS_INFO("CAT backend configuring intial planning group");
@@ -450,10 +474,81 @@ void cat::CatBackend::backgroundJobCompleted(void)
   //addMainLoopJob(boost::bind(&CatBackend::updateBackgroundJobProgressBar, this));
 }
 
-void cat::CatBackend::addBackgroundJob(const boost::function<void(void)> &job)
+void cat::CatBackend::addTeleopJob(const boost::function<void(void)> &job)
 {
-  background_process_.addJob(job);
+  teleop_process_.addJob(job);
   //addMainLoopJob(boost::bind(&MotionPlanningDisplay::updateBackgroundJobProgressBar, this));
+}
+
+//void cat::CatBackend::addPerceptionJob(const boost::function<void(void)> &job)
+//{
+//  perception_process_.addJob(job);
+//}
+
+
+
+void cat::CatBackend::onPlanningSceneMonitorUpdate(const planning_scene_monitor::PlanningSceneMonitor::SceneUpdateType& type)
+{
+  ROS_DEBUG_NAMED("scene_monitor", "Processing callback for event");
+
+  if(type == planning_scene_monitor::PlanningSceneMonitor::UPDATE_GEOMETRY)
+  {
+    planning_scene::PlanningScenePtr new_scene;
+    {
+      ROS_DEBUG_NAMED("scene_monitor", "Copying the latest planning scene!");
+      planning_scene_monitor::LockedPlanningSceneRW lscene = getPlanningSceneRW();
+      new_scene = planning_scene::PlanningScene::clone(lscene);
+      lscene->setCurrentState(*last_current_state_);
+    }
+    //last_scene_update_time_ = planning_scene_monitor_->getLastUpdateTime();
+    ROS_DEBUG_NAMED("scene_monitor", "Copied planning scene, waiting on teleop lock...");
+    scene_lock_.lock();
+    planning_scene_ = new_scene;
+    ROS_DEBUG_NAMED("scene_monitor", "New planning scene is in place!");
+    scene_lock_.unlock();
+    boost::mutex::scoped_lock slock(last_current_state_lock_);
+
+  }
+
+
+
+//  if(last_scene_update_time_ < planning_scene_monitor_->getLastUpdateTime())
+//  {
+//    ROS_DEBUG("Copying the latest planning scene!");
+//    planning_scene::PlanningScenePtr new_scene = planning_scene::PlanningScene::clone(getPlanningSceneRO());
+//    last_scene_update_time_ = planning_scene_monitor_->getLastUpdateTime();
+//    ROS_DEBUG("Copied planning scene, waiting on teleop lock...");
+//    scene_lock_.lock();
+//    planning_scene_ = new_scene;
+//    ROS_DEBUG("New planning scene is in place!");
+//    scene_lock_.unlock();
+//  }
+//  addPerceptionJob(boost::bind(&CatBackend::updatePlanningScene, this));
+}
+
+void cat::CatBackend::timerCallback()
+{
+  ROS_DEBUG_NAMED("timer_events", "Start of timer callback!");
+}
+
+void cat::CatBackend::setAndPublishLastCurrentState(const sensor_msgs::JointStateConstPtr& joint_state )
+{
+  moveit_msgs::PlanningScene gs;
+  boost::mutex::scoped_lock slock(last_current_state_lock_);
+  ROS_DEBUG_NAMED("state", "Saving new last_current_state");
+  last_current_state_->setStateValues(*joint_state);
+  kinematic_state::kinematicStateToRobotState(*last_current_state_, gs.robot_state);
+  publish_current_state_.publish(gs);
+}
+
+void cat::CatBackend::setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state)
+{
+  boost::mutex::scoped_lock slock(last_goal_state_lock_);
+  ROS_DEBUG("Saving new last_goal_state");
+  moveit_msgs::PlanningScene gs;
+  *last_goal_state_ = *state;
+  kinematic_state::kinematicStateToRobotState(*last_goal_state_, gs.robot_state);
+  publish_goal_state_.publish(gs);
 }
 
 void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
@@ -462,8 +557,6 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
   //boost::mutex::scoped_lock slock(teleop_lock_);
   teleop_lock_.lock();
   ROS_DEBUG("Teleop update got lock! v v v v v v v v v v v v v v v v v v v v v");
-
-  planning_scene_ = planning_scene::PlanningScene::clone(getPlanningSceneRO());
 
   ROS_DEBUG("Copied planning scene.");
   ros::Time update_start_time = ros::Time::now();
@@ -530,7 +623,7 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
 
   // When all is done, it gets ready to call itself again!
   if(config_.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
-    addBackgroundJob(boost::bind(&CatBackend::computeTeleopUpdate, this, next_cycle_allowed_time));
+    addTeleopJob(boost::bind(&CatBackend::computeTeleopUpdate, this, next_cycle_allowed_time));
 }
 
 // =============================================================================
@@ -555,7 +648,16 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
     ROS_WARN("There are %zd active end-effectors, only handling the first one... (this will probably cause a crash in the planner)", aee.size());
 
   // TODO add an estimated velocity correction so that the arm moves smoothly!
-  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(planning_scene_->getCurrentState()));
+  kinematic_state::KinematicStatePtr future_start_state;
+  try{
+    boost::mutex::scoped_lock slock(last_current_state_lock_);
+    future_start_state.reset( new kinematic_state::KinematicState(*last_current_state_));
+  }
+  catch(...)
+  {
+    ROS_ERROR("Failed to copy the last current state, aborting planning request...");
+    return;
+  }
 
   moveit_msgs::MotionPlanRequest req;
   geometry_msgs::PoseStamped goal_pose;
@@ -566,7 +668,7 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
 //    req.motion_plan_request.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(future_start_state->getJointStateGroup(group_name),
 //                                                                                                       .001, .001));
   req.num_planning_attempts = 1;
-  req.allowed_planning_time = target_period*0.65;  // TODO mgic number!
+  req.allowed_planning_time = target_period*0.75;  // TODO mgic number!
 
   moveit_msgs::MotionPlanResponse res;
   generatePlan(cat_planning_pipeline_, req, res, future_time);
@@ -602,7 +704,15 @@ void cat::CatBackend::computeTeleopJTUpdate(const ros::Duration &target_period)
     geometry_msgs::PoseStamped goal_pose;
     getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[i], goal_pose);
     geometry_msgs::PoseStamped current_pose;
-    tf::poseEigenToMsg(planning_scene_->getCurrentState().getLinkState(aee[i].parent_link)->getGlobalLinkTransform(), current_pose.pose);
+    try{
+      boost::mutex::scoped_lock slock(last_current_state_lock_);
+      tf::poseEigenToMsg(last_current_state_->getLinkState(aee[i].parent_link)->getGlobalLinkTransform(), current_pose.pose);
+    }
+    catch(...)
+    {
+      ROS_ERROR("Didn't find state or transform for link [%s]", aee[i].parent_link.c_str());
+    }
+
     double linear_clip = target_period.toSec()*config_.jt_linear_clip_ratio;
     double angle_clip = target_period.toSec()*config_.jt_angle_clip_ratio;
     double clip_fraction = 0;
@@ -745,7 +855,16 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   if (group_name.empty())
     return;
 
-  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(planning_scene_->getCurrentState()));
+  kinematic_state::KinematicStatePtr future_start_state;
+  try{
+    boost::mutex::scoped_lock slock(last_current_state_lock_);
+    future_start_state.reset( new kinematic_state::KinematicState(*last_current_state_));
+  }
+  catch(...)
+  {
+    ROS_ERROR("Failed to copy the last current state, aborting planning request...");
+    return;
+  }
 
   ROS_DEBUG("Formulating planning request");
   moveit_msgs::MotionPlanRequest req;
@@ -788,8 +907,11 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
   {
     // lock the planning scene in this scope
     //planning_scene_monitor::LockedPlanningSceneRO lscene(planning_scene_monitor_);
+    scene_lock_.lock();
+    planning_scene::PlanningScenePtr scene = planning_scene_; // This ensures the underlying memory sticks around until we are done!
+    scene_lock_.unlock();
     ROS_DEBUG_NAMED("cat_backend", "Issuing planning request.");
-    solved = pipeline->generatePlan(planning_scene_, req, res);
+    solved = pipeline->generatePlan(scene, req, res);
   }
   catch(std::runtime_error &ex)
   {
@@ -855,7 +977,7 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
   {
     // Do nothing?
   }
-  setAndPublishLastCurrentState();
+  //setAndPublishLastCurrentState();
   updateInactiveGroupsFromCurrentRobot();
 
   for(int i=0; i < aee.size(); i++)
@@ -875,32 +997,13 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
   }
 
   // Update the markers
-  ROS_DEBUG("Refreshing markers.");
   if(needs_refresh)
   {
+    ROS_DEBUG("Refreshing markers.");
     robot_interaction_->addInteractiveMarkers(getQueryGoalStateHandler());
     robot_interaction_->publishInteractiveMarkers();
   }
-}
-
-void cat::CatBackend::setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state)
-{
-  boost::mutex::scoped_lock slock(last_goal_state_lock_);
-  ROS_DEBUG("Saving new last_goal_state");
-  moveit_msgs::PlanningScene gs;
-  *last_goal_state_ = *state;
-  kinematic_state::kinematicStateToRobotState(*last_goal_state_, gs.robot_state);
-  publish_goal_state_.publish(gs);
-}
-
-void cat::CatBackend::setAndPublishLastCurrentState()
-{
-  boost::mutex::scoped_lock slock(last_current_state_lock_);
-  ROS_DEBUG("Saving new last_current_state");
-  moveit_msgs::PlanningScene gs;
-  *last_current_state_ = getPlanningSceneRO()->getCurrentState();
-  kinematic_state::kinematicStateToRobotState(*last_current_state_, gs.robot_state);
-  publish_current_state_.publish(gs);
+  ROS_DEBUG("Done with query goal callback.");
 }
 
 void cat::CatBackend::publishErrorMetrics()
@@ -911,9 +1014,12 @@ void cat::CatBackend::publishErrorMetrics()
 void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
 {
   ROS_DEBUG("Updating inactive groups!");
-  boost::mutex::scoped_lock slock(last_current_state_lock_);
-  kinematic_state::KinematicState new_state = *last_current_state_;
-    const kinematic_state::JointStateGroup* jsg = query_goal_state_->getState()->getJointStateGroup(getCurrentPlanningGroup());
+  kinematic_state::KinematicStatePtr new_state;
+  {
+    boost::mutex::scoped_lock slock(last_current_state_lock_);
+    new_state.reset( new kinematic_state::KinematicState(*last_current_state_) );
+  }
+  const kinematic_state::JointStateGroup* jsg = query_goal_state_->getState()->getJointStateGroup(getCurrentPlanningGroup());
   if(jsg)
   {
     //ROS_INFO("Setting values for group %s", jsg->getName().c_str());
@@ -921,18 +1027,21 @@ void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
     for(size_t i=0; i < jsv.size(); i++)
     {
       //("Setting values for joint %s", jsv[i]->getName().c_str());
-      new_state.getJointState(jsv[i]->getName())->setVariableValues(jsv[i]->getVariableValues());
+      new_state->getJointState(jsv[i]->getName())->setVariableValues(jsv[i]->getVariableValues());
     }
   }
-  query_goal_state_->setState(new_state);
+  query_goal_state_->setState(*new_state);
 }
 
 bool cat::CatBackend::isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const
 {
-  if ( config_.collision_aware_ik && planning_scene_monitor_)
+  if ( config_.collision_aware_ik && planning_scene_ )
   {
     group->setVariableValues(ik_solution);
-    return !getPlanningSceneRO()->isStateColliding(*group->getKinematicState(), group->getName());
+    //scene_lock_.lock();
+    planning_scene::PlanningScenePtr scene = planning_scene_; // This ensures the underlying memory sticks around until we are done!
+    //scene_lock_.unlock();
+    return !scene->isStateColliding(*group->getKinematicState(), group->getName());
   }
   else
     return true;
@@ -1000,7 +1109,10 @@ void cat::CatBackend::changedPlanningGroup(void)
     }
 
     // Set query to current state to help with IK seed.
-    query_goal_state_->setState(getPlanningSceneRO()->getCurrentState());
+    {
+      boost::mutex::scoped_lock slock(last_current_state_lock_);
+      query_goal_state_->setState(*last_current_state_);
+    }
     setAndPublishLastGoalState(query_goal_state_->getState());
 
     query_goal_state_->setControlsVisible(config_.show_controls);
@@ -1073,6 +1185,6 @@ void cat::CatBackend::executeMainLoopJobs(void)
 
 void cat::CatBackend::updateBackgroundJobProgressBar(void)
 {
-  std::size_t n = background_process_.getJobCount();
+  std::size_t n = teleop_process_.getJobCount();
   // publish job count?
 }

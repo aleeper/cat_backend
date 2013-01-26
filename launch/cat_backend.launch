@@ -1,20 +1,22 @@
 <launch>
   <arg name="cat_node_name" value="cat_backend_node" />
-
-  <arg name="debug" default="false" />
-  <arg unless="$(arg debug)" name="launch_prefix" value="" />
-  <arg     if="$(arg debug)" name="launch_prefix" value="gdb --ex run --args" />
-
-  <arg unless="$(arg debug)" name="command_args" value="" />
-  <arg     if="$(arg debug)" name="command_args" value="--debug" />
-
   
+  <arg name="threads" default="2" />
   <arg name="prj" default="false" />
   <arg name="pr2_ik" default="true" />
   <arg name="load_robot_description" default="false" />
   <arg name="allow_trajectory_execution" default="true"/>
   <arg name="max_safe_path_cost" default="1"/>
 
+  <arg name="debug" default="false" />
+  <arg unless="$(arg debug)" name="launch_prefix" value="" />
+  <arg     if="$(arg debug)" name="launch_prefix" value="gdb --ex run --args" />
+
+  <arg unless="$(arg debug)" name="debug_args" value="" />
+  <arg     if="$(arg debug)" name="debug_args" value="--debug" />
+  <arg name="command_args" value="$(arg debug_args) --threads $(arg threads)" />
+
+  
   <include file="$(find cat_backend)/launch/c_jt.launch" >
   </include>
 

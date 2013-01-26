@@ -118,7 +118,8 @@ public:
   const planning_scene_monitor::PlanningSceneMonitorPtr& getPlanningSceneMonitor(void);
 
   // pass the execution of this function call to a separate thread that runs in the background
-  void addBackgroundJob(const boost::function<void(void)> &job);
+  void addTeleopJob(const boost::function<void(void)> &job);
+  void addPerceptionJob(const boost::function<void(void)> &job);
 
   // queue the execution of this function for the next time the main update() loop gets called
   void addMainLoopJob(const boost::function<void(void)> &job);
@@ -133,6 +134,8 @@ protected: // methods
   void executeMainLoopJobs(void);
   void updateBackgroundJobProgressBar(void);
   void backgroundJobCompleted(void);
+
+  void updatePlanningScene();
 
   void computeTeleopUpdate(const ros::Duration& target_period);
   void computeTeleopJTUpdate(const ros::Duration& target_period);
@@ -183,7 +186,10 @@ protected: // methods
   void onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih, bool needs_refresh);
 
   void setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state);
-  void setAndPublishLastCurrentState();
+
+  void setAndPublishLastCurrentState(const sensor_msgs::JointStateConstPtr &joint_state);
+
+  void onPlanningSceneMonitorUpdate(const planning_scene_monitor::PlanningSceneMonitor::SceneUpdateType& type);
 
   void updateInactiveGroupsFromCurrentRobot();
 
@@ -191,6 +197,7 @@ protected: // methods
 
 protected:
   void publishErrorMetrics();
+  void timerCallback();
 
 
 protected: // members
@@ -221,11 +228,16 @@ protected: // members
   ros::Publisher publish_error_;
 
 
-  BackgroundProcessing background_process_;
+  BackgroundProcessing teleop_process_;
+  BackgroundProcessing perception_process_;
   std::deque<boost::function<void(void)> > main_loop_jobs_;
   boost::mutex main_loop_jobs_lock_;
   boost::mutex last_goal_state_lock_;
   boost::mutex last_current_state_lock_;
+  boost::mutex scene_lock_;
+  ros::Time last_scene_update_time_;
+
+  ros::Timer timer_;
 
   PlanningStateInterpolator psi_;
 
