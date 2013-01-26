@@ -32,6 +32,7 @@
 
 #include <cat_backend/background_processing.h>
 #include <cat_backend/BackendConfig.h>
+#include <cat_backend/plan_interpolator.h>
 
 #include <moveit/robot_interaction/robot_interaction.h>
 
@@ -43,11 +44,7 @@
 
 #include <moveit/kinematic_state/conversions.h>
 
-//#include <moveit_msgs/ExecuteKnownTrajectory.h>
-//#include <moveit_msgs/QueryPlannerInterfaces.h>
-
-#include <moveit/trajectory_processing/iterative_time_parameterization.h>
-
+//#include <moveit/trajectory_processing/iterative_time_parameterization.h>
 
 #include <tf/transform_listener.h>
 #include <moveit/plan_execution/plan_execution.h>
@@ -58,52 +55,6 @@
 
 namespace cat
 {
-
-class PlanningStateInterpolator
-{
-public:
-  PlanningStateInterpolator() : has_new_plan_(false), plan_is_valid_(false) {}
-  ~PlanningStateInterpolator(){}
-
-  void findIndexAtTimeFromStart(const ros::Duration& time, int& before, int& after, double &interpolate);
-
-  void getStateAtTime(const ros::Time &request_time, kinematic_state::KinematicStatePtr& start_state,
-                                         moveit_msgs::RobotState& rs);
-
-  void printPlan();
-
-  void clearPlan()
-  {
-    has_new_plan_ = false;
-    plan_is_valid_ = false;
-  }
-
-  void setPlan(const move_group_interface::MoveGroup::Plan& plan)
-  {
-    current_plan_.reset( new move_group_interface::MoveGroup::Plan(plan));
-    has_new_plan_ = true;
-    plan_is_valid_ = true;
-  }
-
-  bool hasNewPlan()
-  {
-    return has_new_plan_;
-  }
-
-  void setPlanAsOld()
-  {
-    has_new_plan_ = false;
-  }
-
-  const move_group_interface::MoveGroup::Plan& getPlan()
-  {
-    return *current_plan_;
-  }
-
-  bool has_new_plan_;
-  bool plan_is_valid_;
-  boost::shared_ptr<move_group_interface::MoveGroup::Plan> current_plan_;
-};
 
 // ***************************************************************************************
 class CatBackend
@@ -239,9 +190,9 @@ protected: // members
 
   ros::Timer timer_;
 
-  PlanningStateInterpolator psi_;
+  plan_interpolator::PlanInterpolator psi_;
 
-  trajectory_processing::IterativeParabolicTimeParameterization smoother_;
+  //trajectory_processing::IterativeParabolicTimeParameterization smoother_;
 
 
   moveit_msgs::WorkspaceParameters workspace_parameters_;

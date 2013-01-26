@@ -41,191 +41,7 @@
 #include <boost/thread/mutex.hpp>
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
 
-
-// TODO get these out of here!!!
-// ====================================================================================================================
-// Convenience functions from object manipulator
-// ====================================================================================================================
-namespace{
-
-// Stolen wholesale from object_manipulator::MechanismInterface
-void positionAndAngleDist(Eigen::Affine3d start, Eigen::Affine3d end,
-                                              double &pos_dist,
-double &angle, Eigen::Vector3d &axis, Eigen::Vector3d &direction)
-{
-  //trans = end to start = global to start * end to global
-  Eigen::Affine3d trans;
-  trans = start.inverse() * end;
-  Eigen::AngleAxis<double> angle_axis;
-  angle_axis = trans.rotation();
-  angle = angle_axis.angle();
-  axis = angle_axis.axis();
-  if(angle > M_PI)
-  {
-    angle = -(angle - 2*M_PI);
-    axis = -axis;
-  }
-  direction = trans.translation();
-  pos_dist = sqrt(direction.dot(direction));
-  if(pos_dist) direction *= 1/pos_dist;
-}
-
-// Stolen wholesale from object_manipulator::MechanismInterface
-geometry_msgs::PoseStamped clipDesiredPose(const geometry_msgs::PoseStamped &current_pose,
-                                           const geometry_msgs::PoseStamped &desired_pose,
-                                           double clip_dist, double clip_angle,
-                                           double &resulting_clip_fraction)
-{
-  //no clipping desired
-  if(clip_dist == 0 && clip_angle == 0) return desired_pose;
-
-  //Get the position and angle dists between current and desired
-  Eigen::Affine3d current_trans, desired_trans;
-  double pos_dist, angle;
-  Eigen::Vector3d axis, direction;
-  tf::poseMsgToEigen(current_pose.pose, current_trans);
-  tf::poseMsgToEigen(desired_pose.pose, desired_trans);
-  positionAndAngleDist(current_trans, desired_trans, pos_dist, angle, axis, direction);
-
-  //Clip the desired pose to be at most clip_dist and the desired angle to be at most clip_angle (proportional)
-  //from the current
-  double pos_mult, angle_mult;
-  double pos_change, angle_change;
-  angle_mult = fabs(angle / clip_angle);
-  pos_mult = fabs(pos_dist / clip_dist);
-  if(pos_mult <=1 && angle_mult <=1){
-    return desired_pose;
-  }
-  double mult = pos_mult;
-  if(angle_mult > pos_mult) mult = angle_mult;
-  pos_change = pos_dist / mult;
-  angle_change = angle / mult;
-  resulting_clip_fraction = 1 / mult;
-
-  Eigen::Affine3d clipped_trans;
-  clipped_trans = current_trans;
-  Eigen::Vector3d scaled_direction;
-  scaled_direction = direction * pos_change;
-  Eigen::Translation3d translation(scaled_direction);
-  clipped_trans = clipped_trans * translation;
-  Eigen::AngleAxis<double> angle_axis(angle_change, axis);
-  clipped_trans = clipped_trans * angle_axis;
-  geometry_msgs::PoseStamped clipped_pose;
-  tf::poseEigenToMsg(clipped_trans, clipped_pose.pose);
-  clipped_pose.header = desired_pose.header;
-  return clipped_pose;
-}
-
-}
-
-// ====================================================================================================================
-// Planning State Interpolator
-// ====================================================================================================================
-
-void cat::PlanningStateInterpolator::findIndexAtTimeFromStart(const ros::Duration& time, int& before, int& after, double &interpolate)
-{
-  size_t num_points = current_plan_->trajectory_.joint_trajectory.points.size();
-  size_t index = 0;
-
-  for( ; index < num_points; index++)
-  {
-    ROS_DEBUG("Trajectory index %zd of %zd. Time: %.3f vs. %.3f ",
-             index,
-             current_plan_->trajectory_.joint_trajectory.points.size(),
-             current_plan_->trajectory_.joint_trajectory.points[index].time_from_start.toSec(),
-             time.toSec());
-    if( current_plan_->trajectory_.joint_trajectory.points[index].time_from_start > time )
-      break;
-  }
-
-  before = std::max<int>(index - 1, 0);
-  after = std::min<int>(index, num_points - 1);
-  ros::Duration before_time = current_plan_->trajectory_.joint_trajectory.points[before].time_from_start;
-  ros::Duration after_time = current_plan_->trajectory_.joint_trajectory.points[after].time_from_start;
-  ros::Duration interval = after_time - before_time;
-  if(after == before || interval.toSec() <= 0 )
-    interpolate = 1.0;
-  else
-    interpolate = (time - before_time).toSec() / interval.toSec();
-}
-
-void cat::PlanningStateInterpolator::getStateAtTime(const ros::Time &request_time, kinematic_state::KinematicStatePtr& start_state,
-                                       moveit_msgs::RobotState& rs)
-{
-  if(plan_is_valid_ && current_plan_ && current_plan_->trajectory_.joint_trajectory.points.size() >= 2)
-  {
-    ros::Time plan_start_time = current_plan_->trajectory_.joint_trajectory.header.stamp;
-    ros::Duration diff_time = request_time - plan_start_time;
-    if( diff_time.toSec() < 0)
-    {
-      ROS_ERROR("diff_time is negative... what does this mean?");
-      diff_time = ros::Duration(0.0);
-    }
-
-    kinematic_state::KinematicStatePtr future_start_state_1, future_start_state_2;
-    future_start_state_1.reset( new kinematic_state::KinematicState(*start_state));
-    future_start_state_2.reset( new kinematic_state::KinematicState(*start_state));
-
-    int before=0, after=0;
-    double interpolate = 1.0;
-    findIndexAtTimeFromStart(diff_time, before, after, interpolate);
-    ROS_DEBUG("Using indices %d and %d with interpolation %.3f.", before, after, interpolate);
-    const trajectory_msgs::JointTrajectoryPoint& point_before = current_plan_->trajectory_.joint_trajectory.points[before];
-    const trajectory_msgs::JointTrajectoryPoint& point_after = current_plan_->trajectory_.joint_trajectory.points[after];
-    const std::vector<std::string>& joint_names = current_plan_->trajectory_.joint_trajectory.joint_names;
-
-    future_start_state_1->setStateValues(current_plan_->trajectory_.joint_trajectory.joint_names, point_before.positions);
-    future_start_state_2->setStateValues(current_plan_->trajectory_.joint_trajectory.joint_names, point_after.positions);
-    future_start_state_1->interpolate(*future_start_state_2, interpolate, *start_state);
-
-    kinematic_state::kinematicStateToRobotState(*start_state, rs);
-    std::map<std::string, double> velocity_map;
-
-    if(point_after.velocities.size() == joint_names.size())
-    {
-      ROS_DEBUG("Cat backend has velocity data; populating...");
-      for(int i=0; i < point_after.velocities.size(); i++)
-      {
-        velocity_map[joint_names[i]] = (point_after.velocities[i] - point_before.velocities[i])*interpolate + point_before.velocities[i];
-      }
-
-      rs.joint_state.velocity.resize(rs.joint_state.name.size());
-      for(int j = 0; j < rs.joint_state.name.size(); j++)
-      {
-        std::map<std::string, double>::const_iterator it = velocity_map.find(rs.joint_state.name[j]);
-        if(it != velocity_map.end())
-          rs.joint_state.velocity[j] = it->second;
-        else
-          rs.joint_state.velocity[j] = 0.0;
-      }
-      rs.joint_state.header.stamp = request_time;
-    }
-    else
-    {
-      ROS_WARN("trajectory point has %zd velocities while joint_names has %zd joints.",
-               point_after.velocities.size(),
-               joint_names.size());
-      rs.joint_state.header.stamp = ros::Time(0);
-    }
-  }
-  else
-  {
-    ROS_DEBUG("No stored plan, just returning input state...");
-    kinematic_state::kinematicStateToRobotState(*start_state, rs);
-    rs.joint_state.header.stamp = ros::Time(0);
-  }
-}
-
-void cat::PlanningStateInterpolator::printPlan()
-{
-  if(current_plan_)
-  {
-    std::string valid_plan = plan_is_valid_ ? "valid" : "not valid";
-    std::string new_plan   = has_new_plan_  ? "unused" : "already used";
-    ROS_INFO("Current plan is %s and %s.", valid_plan.c_str(), new_plan.c_str());
-    ROS_INFO_STREAM(current_plan_->trajectory_);
-  }
-}
+#include <cat_backend/util.h>
 
 
 // ====================================================================================================================
@@ -293,6 +109,8 @@ private:
     if(level == cat_backend::Backend_TELEOP_MODE)
     {
       owner_->psi_.clearPlan();
+      owner_->changedPlanningGroup();
+
       std::vector<std::string> cartesian_controllers(2), joint_controllers(2);
       cartesian_controllers[0] = "r_cart";
       cartesian_controllers[1] = "l_cart";
@@ -316,16 +134,16 @@ private:
       switch(config.teleop_mode)
       {
       case cat_backend::Backend_TELEOP_JT:
-        owner_->config_.target_period = config.target_period = 0.015; // TODO magic number! (parameter?)
+        owner_->config_.target_period = config.target_period = 0.03333; // TODO magic number! (parameter?)
         break;
       case cat_backend::Backend_TELEOP_IK:
-        owner_->config_.target_period = config.target_period = 0.033; // TODO magic number! (parameter?)
+        owner_->config_.target_period = config.target_period = 0.03333; // TODO magic number! (parameter?)
         break;
       case cat_backend::Backend_TELEOP_MP:
         owner_->config_.target_period = config.target_period = 0.3; // TODO magic number! (parameter?)
         break;
       case cat_backend::Backend_TELEOP_CVX:
-        owner_->config_.target_period = config.target_period = 0.033; // TODO magic number! (parameter?)
+        owner_->config_.target_period = config.target_period = 0.03333; // TODO magic number! (parameter?)
         break;
       default:
         // do nothing
@@ -509,21 +327,6 @@ void cat::CatBackend::onPlanningSceneMonitorUpdate(const planning_scene_monitor:
     boost::mutex::scoped_lock slock(last_current_state_lock_);
 
   }
-
-
-
-//  if(last_scene_update_time_ < planning_scene_monitor_->getLastUpdateTime())
-//  {
-//    ROS_DEBUG("Copying the latest planning scene!");
-//    planning_scene::PlanningScenePtr new_scene = planning_scene::PlanningScene::clone(getPlanningSceneRO());
-//    last_scene_update_time_ = planning_scene_monitor_->getLastUpdateTime();
-//    ROS_DEBUG("Copied planning scene, waiting on teleop lock...");
-//    scene_lock_.lock();
-//    planning_scene_ = new_scene;
-//    ROS_DEBUG("New planning scene is in place!");
-//    scene_lock_.unlock();
-//  }
-//  addPerceptionJob(boost::bind(&CatBackend::updatePlanningScene, this));
 }
 
 void cat::CatBackend::timerCallback()
@@ -659,14 +462,42 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
     return;
   }
 
+  // deadband test
+  {
+    geometry_msgs::PoseStamped goal_pose;
+    getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[0], goal_pose);
+    geometry_msgs::PoseStamped current_pose;
+    try{
+      boost::mutex::scoped_lock slock(last_current_state_lock_);
+      tf::poseEigenToMsg(last_current_state_->getLinkState(aee[0].parent_link)->getGlobalLinkTransform(), current_pose.pose);
+    }
+    catch(...)
+    {
+      ROS_ERROR("Didn't find state or transform for link [%s]", aee[0].parent_link.c_str());
+    }
+
+    double linear_clip = config_.pos_deadband;
+    double angle_clip = config_.angle_deadband;
+    double clip_fraction = 1.5;
+    goal_pose = clipDesiredPose(current_pose, goal_pose, linear_clip, angle_clip, clip_fraction );
+    if(clip_fraction > 1)
+    {
+      ROS_DEBUG("Pose error is within deadband, returning...");
+      return;
+    }
+  }
+
   moveit_msgs::MotionPlanRequest req;
   geometry_msgs::PoseStamped goal_pose;
   getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[0], goal_pose);
   req.group_name = group_name;
   psi_.getStateAtTime( future_time, future_start_state, req.start_state);
   req.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(aee[0].parent_link, goal_pose));
-//    req.motion_plan_request.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(future_start_state->getJointStateGroup(group_name),
-//                                                                                                       .001, .001));
+  {
+    boost::mutex::scoped_lock slock(last_goal_state_lock_);
+    req.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(future_start_state->getJointStateGroup(group_name),
+                                                                                                       .001, .001));
+  }
   req.num_planning_attempts = 1;
   req.allowed_planning_time = target_period*0.75;  // TODO mgic number!
 
@@ -700,7 +531,6 @@ void cat::CatBackend::computeTeleopJTUpdate(const ros::Duration &target_period)
   const std::vector<robot_interaction::RobotInteraction::EndEffector>& aee = robot_interaction_->getActiveEndEffectors();
   for(int i = 0; i < aee.size(); i++)
   {
-    // TODO clip the commanded pose!
     geometry_msgs::PoseStamped goal_pose;
     getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[i], goal_pose);
     geometry_msgs::PoseStamped current_pose;
@@ -876,7 +706,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   ROS_DEBUG("Constructing goal constraint...");
   req.goal_constraints.resize(1);
   last_goal_state_lock_.lock();
-  req.goal_constraints[0] = kinematic_constraints::constructGoalConstraints(last_goal_state_->getJointStateGroup(group_name), config_.goal_tolerance);
+  req.goal_constraints[0] = kinematic_constraints::constructGoalConstraints(last_goal_state_->getJointStateGroup(group_name), config_.joint_tolerance);
   last_goal_state_lock_.unlock();
 
   moveit_msgs::MotionPlanResponse result;
