@@ -100,6 +100,8 @@ protected: // methods
 
   void setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz);
 
+  void zeroFTSensor();
+
   std::string modeToStr(int mode);
 
 
@@ -147,7 +149,7 @@ protected: // methods
   std::string getCurrentPlanningGroup(void) const;
 
 protected:
-  void publishErrorMetrics();
+  void publishErrorMetrics(const robot_interaction::RobotInteraction::EndEffector& eef);
   void timerCallback();
 
 
@@ -177,6 +179,7 @@ protected: // members
   ros::Publisher publish_cartesian_goal_right_;
 
   ros::Publisher publish_error_;
+  ros::Publisher publish_zero_ft_;
 
 
   BackgroundProcessing teleop_process_;

@@ -60,35 +60,63 @@ void PlanInterpolator::getStateAtTime(const ros::Time &request_time, kinematic_s
     future_start_state_1->interpolate(*future_start_state_2, interpolate, *start_state);
 
     kinematic_state::kinematicStateToRobotState(*start_state, rs);
-    std::map<std::string, double> velocity_map;
+    std::map<std::string, std::pair<double, double> > velocity_map;
 
-    if(point_after.velocities.size() == joint_names.size())
+    int num_joints = joint_names.size();
+    int num_vel = point_after.velocities.size();
+    int num_accel = point_after.accelerations.size();
+    bool has_velocity_data     = num_joints == num_vel;
+    bool has_acceleration_data = num_joints == num_accel;
+
+    if(has_velocity_data || has_acceleration_data)
+    //if(false)
     {
-      ROS_DEBUG("Have velocity data; populating...");
-      for(int i=0; i < point_after.velocities.size(); i++)
+      if( (has_velocity_data && has_acceleration_data) && num_vel != num_accel )
       {
-        double value = (point_after.velocities[i] - point_before.velocities[i])*interpolate + point_before.velocities[i];
-        velocity_map[joint_names[i]] = value;
-        ROS_DEBUG("Joint [%s] is projected to have velocity [%.3f]", joint_names[i].c_str(), value );
+        ROS_ERROR("Velocity data [%d] and acceleration data [%d] are not the same length!", num_vel, num_accel);
       }
+      else
+      {
+        ROS_DEBUG("Have either velocity [%d] or acceleration [%d] data; populating...",
+                  num_vel, num_accel);
+        for(int i=0; i < num_joints; i++)
+        {
+          double vel = has_velocity_data ?
+                (point_after.velocities[i] - point_before.velocities[i])*interpolate + point_before.velocities[i] : 0;
+          double accel = has_acceleration_data ?
+                (point_after.accelerations[i] - point_before.accelerations[i])*interpolate + point_before.accelerations[i] : 0;
+          velocity_map[joint_names[i]] = std::pair<double, double>(vel, accel);
+          ROS_DEBUG("Joint [%s] is projected to have velocity [%.3f] and accel [%.3f]", joint_names[i].c_str(), vel, accel );
+        }
 
-      rs.joint_state.velocity.resize(rs.joint_state.name.size());
-      for(int j = 0; j < rs.joint_state.name.size(); j++)
-      {
-        std::map<std::string, double>::const_iterator it = velocity_map.find(rs.joint_state.name[j]);
-        if(it != velocity_map.end())
-          rs.joint_state.velocity[j] = it->second;
-        else
-          rs.joint_state.velocity[j] = 0.0;
+        if( has_velocity_data )
+          rs.joint_state.velocity.resize(rs.joint_state.name.size());
+        if( has_acceleration_data )
+          rs.joint_state.effort.resize(rs.joint_state.name.size());
+        for(int j = 0; j < rs.joint_state.name.size(); j++)
+        {
+          std::map<std::string, std::pair<double, double> >::const_iterator it = velocity_map.find(rs.joint_state.name[j]);
+          if(it != velocity_map.end())
+          {
+            if(has_velocity_data)
+              rs.joint_state.velocity[j] = it->second.first;
+            if(has_acceleration_data)
+              rs.joint_state.effort[j] = it->second.second;
+          }
+          else
+          {
+            if(has_velocity_data)
+              rs.joint_state.velocity[j] = 0.0;
+            if(has_acceleration_data)
+              rs.joint_state.effort[j] = 0.0;
+          }
+        }
+        rs.joint_state.header.stamp = request_time;
       }
-      rs.joint_state.header.stamp = request_time;
     }
     else
     {
-      ROS_WARN("trajectory point has %zd velocities while joint_names has %zd joints.",
-               point_after.velocities.size(),
-               joint_names.size());
-      rs.joint_state.header.stamp = ros::Time(0);
+      rs.joint_state.header.stamp = request_time;
     }
   }
   else

@@ -33,13 +33,15 @@
 #include "moveit/kinematic_state/conversions.h"
 #include <moveit/robot_interaction/robot_interaction.h>
 #include <moveit/kinematic_constraints/utils.h>
-#include <std_msgs/Float64.h>
+#include <std_msgs/Float64MultiArray.h>
 #include <tf_conversions/tf_eigen.h>
 #include <eigen_conversions/eigen_msg.h>
 #include <dynamic_reconfigure/server.h>
 #include <boost/thread.hpp>
 #include <boost/thread/mutex.hpp>
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
+
+#include <std_msgs/Bool.h>
 
 #include <cat_backend/util.h>
 
@@ -103,6 +105,7 @@ private:
     {
       owner_->psi_.clearPlan();
       owner_->changedPlanningGroup();
+      owner_->zeroFTSensor();
       config.reset_state = owner_->config_.reset_state = false;
     }
 
@@ -247,9 +250,10 @@ cat::CatBackend::CatBackend(bool debug)
                                            robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
                                          : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
 
-  // ===== Metrics =====
+  // ===== RSS Metrics =====
   //timer_ = root_node_handle_.createTimer(ros::Duration(0.01), boost::bind(&CatBackend::timerCallback, this));
-  publish_error_ = node_handle_.advertise<std_msgs::Float64>("metrics/error_magnitude", 10);
+  publish_error_ = node_handle_.advertise<std_msgs::Float64MultiArray>("metrics/error_magnitude", 10);
+  publish_zero_ft_ = root_node_handle_.advertise<std_msgs::Bool>("/pr2_netft_zeroer/rezero_wrench", 1);
 
   // ===== Get ready to go =====
   //addPerceptionJob(boost::bind(&CatBackend::updatePlanningScene, this));
@@ -265,6 +269,13 @@ cat::CatBackend::~CatBackend(void)
 {
   if(reconfigure_impl_)
     delete reconfigure_impl_;
+}
+
+void cat::CatBackend::zeroFTSensor()
+{
+  std_msgs::Bool msg;
+  msg.data = true;
+  publish_zero_ft_.publish(msg);
 }
 
 std::string cat::CatBackend::modeToStr(int mode)
@@ -316,6 +327,7 @@ void cat::CatBackend::onPlanningSceneMonitorUpdate(const planning_scene_monitor:
       ROS_DEBUG_NAMED("scene_monitor", "Copying the latest planning scene!");
       planning_scene_monitor::LockedPlanningSceneRW lscene = getPlanningSceneRW();
       new_scene = planning_scene::PlanningScene::clone(lscene);
+      boost::mutex::scoped_lock slock(last_current_state_lock_);
       lscene->setCurrentState(*last_current_state_);
     }
     //last_scene_update_time_ = planning_scene_monitor_->getLastUpdateTime();
@@ -324,14 +336,15 @@ void cat::CatBackend::onPlanningSceneMonitorUpdate(const planning_scene_monitor:
     planning_scene_ = new_scene;
     ROS_DEBUG_NAMED("scene_monitor", "New planning scene is in place!");
     scene_lock_.unlock();
-    boost::mutex::scoped_lock slock(last_current_state_lock_);
-
   }
 }
 
 void cat::CatBackend::timerCallback()
 {
   ROS_DEBUG_NAMED("timer_events", "Start of timer callback!");
+  std::vector<robot_interaction::RobotInteraction::EndEffector> aee = robot_interaction_->getActiveEndEffectors(); // copy for safety?
+  if(aee.size() > 0)
+    publishErrorMetrics(aee[0]);
 }
 
 void cat::CatBackend::setAndPublishLastCurrentState(const sensor_msgs::JointStateConstPtr& joint_state )
@@ -339,19 +352,10 @@ void cat::CatBackend::setAndPublishLastCurrentState(const sensor_msgs::JointStat
   moveit_msgs::PlanningScene gs;
   boost::mutex::scoped_lock slock(last_current_state_lock_);
   ROS_DEBUG_NAMED("state", "Saving new last_current_state");
-  last_current_state_->setStateValues(*joint_state);
+  last_current_state_ = planning_scene_monitor_->getStateMonitor()->getCurrentStateAndTime().first;
   kinematic_state::kinematicStateToRobotState(*last_current_state_, gs.robot_state);
   publish_current_state_.publish(gs);
-}
-
-void cat::CatBackend::setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state)
-{
-  boost::mutex::scoped_lock slock(last_goal_state_lock_);
-  ROS_DEBUG("Saving new last_goal_state");
-  moveit_msgs::PlanningScene gs;
-  *last_goal_state_ = *state;
-  kinematic_state::kinematicStateToRobotState(*last_goal_state_, gs.robot_state);
-  publish_goal_state_.publish(gs);
+  //updateInactiveGroupsFromCurrentRobot();
 }
 
 void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
@@ -807,24 +811,7 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
   {
     // Do nothing?
   }
-  //setAndPublishLastCurrentState();
   updateInactiveGroupsFromCurrentRobot();
-
-  for(int i=0; i < aee.size(); i++)
-  {
-    const robot_interaction::RobotInteraction::EndEffector& eef = aee[0]; // only handle the first one...
-    tf::Pose link_pose, goal_pose;
-    geometry_msgs::PoseStamped goal_pose_msg;
-    query_goal_state_->getLastEndEffectorMarkerPose(eef, goal_pose_msg);
-    tf::poseMsgToTF(goal_pose_msg.pose, goal_pose);
-    tf::poseEigenToTF(last_current_state_->getLinkState(eef.parent_link)->getGlobalLinkTransform(), link_pose);
-    tf::Vector3 trans_error = link_pose.getOrigin() - goal_pose.getOrigin();
-    double distance = trans_error.length();
-    double angle = link_pose.getRotation().angleShortestPath(goal_pose.getRotation());
-    std_msgs::Float64 msg;
-    msg.data = distance; // just use distance for now
-    publish_error_.publish(msg);
-  }
 
   // Update the markers
   if(needs_refresh)
@@ -836,9 +823,15 @@ void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction
   ROS_DEBUG("Done with query goal callback.");
 }
 
-void cat::CatBackend::publishErrorMetrics()
+
+void cat::CatBackend::setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state)
 {
-  ROS_ERROR("Publish error metrics doesn't do anything... do we need it?");
+  boost::mutex::scoped_lock slock(last_goal_state_lock_);
+  ROS_DEBUG("Saving new last_goal_state");
+  moveit_msgs::PlanningScene gs;
+  *last_goal_state_ = *state;
+  kinematic_state::kinematicStateToRobotState(*last_goal_state_, gs.robot_state);
+  publish_goal_state_.publish(gs);
 }
 
 void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
@@ -861,6 +854,23 @@ void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
     }
   }
   query_goal_state_->setState(*new_state);
+}
+
+void cat::CatBackend::publishErrorMetrics(const robot_interaction::RobotInteraction::EndEffector& eef)
+{
+  tf::Pose link_pose, goal_pose;
+  geometry_msgs::PoseStamped goal_pose_msg;
+  query_goal_state_->getLastEndEffectorMarkerPose(eef, goal_pose_msg);
+  tf::poseMsgToTF(goal_pose_msg.pose, goal_pose);
+  tf::poseEigenToTF(last_current_state_->getLinkState(eef.parent_link)->getGlobalLinkTransform(), link_pose);
+  tf::Vector3 trans_error = link_pose.getOrigin() - goal_pose.getOrigin();
+  double distance = trans_error.length();
+  double angle = link_pose.getRotation().angleShortestPath(goal_pose.getRotation());
+  std_msgs::Float64MultiArray msg;
+  msg.data.resize(2);
+  msg.data[0] = distance; // just use distance for now
+  msg.data[1] = angle;
+  publish_error_.publish(msg);
 }
 
 bool cat::CatBackend::isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const
