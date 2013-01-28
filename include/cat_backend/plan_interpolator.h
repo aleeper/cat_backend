@@ -19,8 +19,8 @@ public:
 
   void findIndexAtTimeFromStart(const ros::Duration& time, int& before, int& after, double &interpolate);
 
-  void getStateAtTime(const ros::Time &request_time, kinematic_state::KinematicStatePtr& start_state,
-                                         moveit_msgs::RobotState& rs);
+  bool getStateAtTime(const ros::Time &request_time, kinematic_state::KinematicStatePtr& start_state,
+                      moveit_msgs::RobotState& rs, bool do_interpolate);
 
   void printPlan();
 

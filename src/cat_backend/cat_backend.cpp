@@ -495,7 +495,13 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
   geometry_msgs::PoseStamped goal_pose;
   getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[0], goal_pose);
   req.group_name = group_name;
-  psi_.getStateAtTime( future_time, future_start_state, req.start_state);
+  if(!psi_.getStateAtTime( future_time, future_start_state, req.start_state, config_.interpolate))
+  {
+    ROS_DEBUG("Getting ahead of ourselves, waiting for next cycle...");
+    return;
+  }
+  if(future_time < req.start_state.joint_state.header.stamp)
+    future_time = req.start_state.joint_state.header.stamp;
   req.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(aee[0].parent_link, goal_pose));
   {
     boost::mutex::scoped_lock slock(last_goal_state_lock_);
@@ -506,7 +512,7 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
   req.allowed_planning_time = target_period*0.75;  // TODO mgic number!
 
   moveit_msgs::MotionPlanResponse res;
-  generatePlan(cat_planning_pipeline_, req, res, future_time);
+  generatePlan(cat_planning_pipeline_, future_start_state, req, res, future_time);
 
   // ==========================================
   // Send out last plan for execution.
@@ -704,7 +710,13 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   moveit_msgs::MotionPlanRequest req;
   req.allowed_planning_time = target_period*0.75;
   req.num_planning_attempts = 1;
-  psi_.getStateAtTime( future_time, future_start_state, req.start_state);
+  if(!psi_.getStateAtTime( future_time, future_start_state, req.start_state, config_.interpolate))
+  {
+    ROS_DEBUG("Getting ahead of ourselves, waiting for next cycle...");
+    return;
+  }
+  if(future_time < req.start_state.joint_state.header.stamp)
+    future_time = req.start_state.joint_state.header.stamp;
   req.group_name = group_name;
 
   ROS_DEBUG("Constructing goal constraint...");
@@ -714,7 +726,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   last_goal_state_lock_.unlock();
 
   moveit_msgs::MotionPlanResponse result;
-  generatePlan(ompl_planning_pipeline_, req, result, future_time);
+  generatePlan(ompl_planning_pipeline_, future_start_state, req, result, future_time);
 
   // ==========================================
   // Send out last plan for execution.
@@ -732,6 +744,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
 }
 
 bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
+                                   kinematic_state::KinematicStatePtr& start_state,
                                    moveit_msgs::MotionPlanRequest& req,
                                    moveit_msgs::MotionPlanResponse &res,
                                    const ros::Time& future_time_limit)
@@ -767,11 +780,30 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
       ROS_DEBUG("Planning SUCCESS, saving plan.");
       move_group_interface::MoveGroup::Plan plan;
       plan.trajectory_ = res.trajectory;
+
+      if(config_.no_first_accel)
+        plan.trajectory_.joint_trajectory.points.front().accelerations.clear();
+      if(config_.no_last_accel)
+        plan.trajectory_.joint_trajectory.points.back().accelerations.clear();
+
+//      const std::map<std::string, unsigned int>& joint_index_map = start_state->getKinematicModel()->getJointVariablesIndexMap();
+//      if(config_.enforce_accel && req.start_state.joint_state.name.size() == req.start_state.joint_state.effort.size())
+//        for( size_t i = 0; i < plan.trajectory_.joint_trajectory.points[0].accelerations.size(); ++i)
+//        {
+//          const std::string& name = plan.trajectory_.joint_trajectory.joint_names[i];
+//          std::map<std::string, unsigned int>::const_iterator jim_it = joint_index_map.find(name);
+//          if(jim_it != joint_index_map.end())
+//            plan.trajectory_.joint_trajectory.points[0].accelerations[i] = req.start_state.joint_state.effort[jim_it->second];
+//        }
+
       plan.start_state_ = req.start_state;
       plan.trajectory_.joint_trajectory.header.stamp = future_time_limit;
       psi_.setPlan(plan);
       if(config_.verbose)
+      {
+        ROS_INFO_STREAM("Start state will be: \n" << req.start_state.joint_state);
         psi_.printPlan();
+      }
     }
   }
   else

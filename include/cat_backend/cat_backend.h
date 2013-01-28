@@ -94,9 +94,9 @@ protected: // methods
   void computeTeleopMPUpdate(const ros::Duration& target_period);
   void computeTeleopCVXUpdate(const ros::Duration& target_period);
   bool generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
-                    moveit_msgs::MotionPlanRequest& req,
-                    moveit_msgs::MotionPlanResponse &res,
-                    const ros::Time& future_time_limit);  
+                    kinematic_state::KinematicStatePtr &start_state,
+                    moveit_msgs::MotionPlanRequest &req,
+                    moveit_msgs::MotionPlanResponse &res, const ros::Time &future_time_limit);
 
   void setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz);
 
