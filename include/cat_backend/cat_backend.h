@@ -98,6 +98,8 @@ protected: // methods
                     moveit_msgs::MotionPlanRequest &req,
                     moveit_msgs::MotionPlanResponse &res, const ros::Time &future_time_limit);
 
+  std::string getCurrentPlannerId();
+
   void setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz);
 
   void zeroFTSensor();

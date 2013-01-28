@@ -77,7 +77,7 @@ bool PlanInterpolator::getStateAtTime(const ros::Time &request_time, kinematic_s
       {
         ROS_DEBUG("Time is %.3f of the way between index %d and %d. Rounding up to index %d.", interpolation, before, after, after);
         interpolation = 1.0;
-        output_time = plan_start_time + point_after.time_from_start;
+        output_time = plan_start_time + point_after.time_from_start - ros::Duration(0.00001); // prevents double comparison issues in the low-level controller
         start_state->setStateValues(joint_names, point_after.positions);
       }
     }
@@ -90,7 +90,7 @@ bool PlanInterpolator::getStateAtTime(const ros::Time &request_time, kinematic_s
     int num_vel = point_after.velocities.size();
     int num_accel = point_after.accelerations.size();
     bool has_velocity_data     = num_joints == num_vel;
-    bool has_acceleration_data = num_joints == num_accel;
+    bool has_acceleration_data = false;; //num_joints == num_accel;
 
     if(has_velocity_data || has_acceleration_data)
     {

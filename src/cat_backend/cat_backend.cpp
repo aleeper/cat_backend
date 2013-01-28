@@ -209,7 +209,7 @@ cat::CatBackend::CatBackend(bool debug)
   // ===== Planning =====
   ROS_INFO("CAT backend: Initializing planning pipelines");
   ompl_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
-                                                                        "ompl/planning_plugin", "ompl/request_adapters"));
+                                                                        "planning_plugin", "request_adapters"));
   cat_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
                                                                        "cat/planning_plugin", "cat/request_adapters"));
   cat_planning_pipeline_->checkSolutionPaths(false);
@@ -684,6 +684,36 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
   ROS_DEBUG("Done with TeleopIKUpdate");
 }
 
+std::string cat::CatBackend::getCurrentPlannerId()
+{
+  std::string id = "";
+  switch(config_.ompl_planner)
+  {
+  case(cat_backend::Backend_SBLkConfigDefault):
+    id = "SBLkConfigDefault"; break;
+  case(cat_backend::Backend_LBKPIECEkConfigDefault):
+    id = "LBKPIECEkConfigDefault"; break;
+  case(cat_backend::Backend_RRTkConfigDefault):
+    id = "RRTkConfigDefault"; break;
+  case(cat_backend::Backend_RRTConnectkConfigDefault):
+    id = "RRTConnectkConfigDefault"; break;
+  case(cat_backend::Backend_ESTkConfigDefault):
+    id = "ESTkConfigDefault"; break;
+  case(cat_backend::Backend_KPIECEkConfigDefault):
+    id = "KPIECEkConfigDefault"; break;
+  case(cat_backend::Backend_BKPIECEkConfigDefault):
+    id = "BKPIECEkConfigDefault"; break;
+  case(cat_backend::Backend_RRTStarkConfigDefault):
+    id = "RRTStarkConfigDefault"; break;
+  default:
+    ROS_WARN("Planner id %d not found, returning empty string...", config_.ompl_planner);
+    return "";
+  }
+  std::string result = getCurrentPlanningGroup() + "[" + id + "]";
+  ROS_DEBUG("Using planner config: %s", result.c_str());
+  return result;
+}
+
 // ============================================================================
 // ============================= Motion Planning ==============================
 // ============================================================================
@@ -718,6 +748,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   if(future_time < req.start_state.joint_state.header.stamp)
     future_time = req.start_state.joint_state.header.stamp;
   req.group_name = group_name;
+  req.planner_id = getCurrentPlannerId();
 
   ROS_DEBUG("Constructing goal constraint...");
   req.goal_constraints.resize(1);
