@@ -41,6 +41,8 @@
 #include <boost/thread/mutex.hpp>
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
 
+
+
 #include <std_msgs/Bool.h>
 
 #include <cat_backend/util.h>
@@ -251,9 +253,11 @@ cat::CatBackend::CatBackend(bool debug)
                                          : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
 
   // ===== RSS Metrics =====
-  //timer_ = root_node_handle_.createTimer(ros::Duration(0.01), boost::bind(&CatBackend::timerCallback, this));
+  timer_ = root_node_handle_.createTimer(ros::Duration(0.01), boost::bind(&CatBackend::timerCallback, this));
   publish_error_ = node_handle_.advertise<std_msgs::Float64MultiArray>("metrics/error_magnitude", 10);
   publish_zero_ft_ = root_node_handle_.advertise<std_msgs::Bool>("/pr2_netft_zeroer/rezero_wrench", 1);
+  subscribe_ft_wrench_ = root_node_handle_.subscribe<geometry_msgs::WrenchStamped>("/pr2_netft_zeroer/wrench_zeroed", 1,
+                                                     boost::bind(&CatBackend::onNewWrench, this, _1));
 
   // ===== Get ready to go =====
   //addPerceptionJob(boost::bind(&CatBackend::updatePlanningScene, this));
@@ -338,6 +342,12 @@ void cat::CatBackend::onPlanningSceneMonitorUpdate(const planning_scene_monitor:
     scene_lock_.unlock();
   }
 }
+
+void cat::CatBackend::onNewWrench(const geometry_msgs::WrenchStamped::ConstPtr& wrench)
+{
+  last_wrench_ = *wrench;
+}
+
 
 void cat::CatBackend::timerCallback()
 {
@@ -581,104 +591,140 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
   if (group_name.empty())
     return;
 
-//  kinematic_state::KinematicStatePtr future_start_state( new kinematic_state::KinematicState(planning_scene_->getCurrentState()));
-//  moveit_msgs::RobotState start_state;
-//  psi_.getStateAtTime( future_time, future_start_state, start_state);
-//  std::vector<moveit_msgs::JointLimits> limits = future_start_state->getKinematicModel()->getJointModelGroup(group_name)->getVariableLimits();
-//  for(size_t i = 0; i < limits.size(); ++i)
-//  {
-//    moveit_msgs::JointLimits& l = limits[i];
-//    if(l.has_velocity_limits)
-//      l.max_velocity *= 2.0; // TODO magic number!
-//  }
+  kinematic_state::KinematicStatePtr future_start_state;
+  try{
+    boost::mutex::scoped_lock slock(last_current_state_lock_);
+    future_start_state.reset( new kinematic_state::KinematicState(*last_current_state_));
+  }
+  catch(...)
+  {
+    ROS_ERROR("Failed to copy the last current state, aborting planning request...");
+    return;
+  }
 
-//  trajectory_msgs::JointTrajectory joint_trajectory;
+  moveit_msgs::RobotState start_state;
+  if(!psi_.getStateAtTime( future_time, future_start_state, start_state, config_.interpolate))
+  {
+    ROS_DEBUG("Getting ahead of ourselves, waiting for next cycle...");
+    return;
+  }
+  if(future_time < start_state.joint_state.header.stamp)
+    future_time = start_state.joint_state.header.stamp;
 
-//  last_goal_state_lock_.lock();
-//  std::vector< const std::vector<kinematic_state::JointState*> * > states(2);
-//  states[0] = &(future_start_state->getJointStateGroup(group_name)->getJointStateVector());
-//  states[1] = &(last_goal_state_->getJointStateGroup(group_name)->getJointStateVector());
-//  if( states[0]->size() != states[1]->size() )
+  std::vector<moveit_msgs::JointLimits> limits = future_start_state->getKinematicModel()->getJointModelGroup(group_name)->getVariableLimits();
+  for(size_t i = 0; i < limits.size(); ++i)
+  {
+    moveit_msgs::JointLimits& l = limits[i];
+    if(l.has_velocity_limits)
+      l.max_velocity *= config_.ik_speed_mult; // TODO magic number!
+  }
+
+  trajectory_msgs::JointTrajectory joint_trajectory;
+
+
+
+  last_goal_state_lock_.lock();
+  int num_states = 4;
+  std::vector< kinematic_state::KinematicStatePtr > states(num_states);
+  states[0] = future_start_state;
+  for(int i = 1; i < num_states - 1; ++i)
+  {
+    kinematic_state::KinematicStatePtr middle_state( new kinematic_state::KinematicState(*future_start_state) );
+    future_start_state->interpolate(*last_goal_state_, i/(double)(num_states - 1.0), *middle_state);
+    states[i] = middle_state;
+  }
+  states[num_states - 1] = last_goal_state_;
+
+//  if( states.front()->size() != states.back()->size() )
 //  {
 //    ROS_ERROR("Joint vectors not the same size! Start has %zd while goal has %zd joints.", states[0]->size(), states[1]->size());
 //    return;
 //  }
-//  joint_trajectory.joint_names.resize(states[0]->size());
-//  joint_trajectory.points.resize(2);
-//  joint_trajectory.header.frame_id = last_goal_state_->getKinematicModel()->getModelFrame();
-//  joint_trajectory.header.stamp = start_state.joint_state.header.stamp;
+  int num_joints = states[0]->getJointStateGroup(group_name)->getJointStateVector().size();
+  joint_trajectory.joint_names.resize(num_joints);
+  joint_trajectory.points.resize(num_states);
+  joint_trajectory.header.frame_id = last_goal_state_->getKinematicModel()->getModelFrame();
+  joint_trajectory.header.stamp = future_time;
 
-//  for(size_t i = 0; i < states.size(); ++i)
-//  {
-//    joint_trajectory.points[i].positions.resize(states[i]->size());
-//    joint_trajectory.points[i].velocities.resize(states[i]->size());
-
-//    // Now actually populate the joints...
-//    for(int j = 0; j < states[i]->size(); j++ )
-//    {
-//      kinematic_state::JointState* js = (*(states[i]))[j];
-//      joint_trajectory.joint_names[j] = js->getName();
-//      joint_trajectory.points[i].positions[j] = js->getVariableValues()[0];
-//      joint_trajectory.points[i].velocities[j] = 0.0;  // TODO could we estimate velocity?
-//    }
-//  }
-//  last_goal_state_lock_.unlock();
-//  smoother_.computeTimeStamps(joint_trajectory, limits, start_state);
-
-//  if(future_time < ros::Time::now() + ros::Duration(0.001)) // TODO this offset is a (vetted) magic number...
-//  {
-//    ROS_WARN("Planning took too long, discarding result.");
-//  }
-//  else
-//  {
-//    ROS_DEBUG("Planning SUCCESS, saving plan.");
-//    move_group_interface::MoveGroup::Plan plan;
-//    plan.trajectory_.joint_trajectory = joint_trajectory;
-//    plan.start_state_ = start_state;
-//    plan.trajectory_.joint_trajectory.header.stamp = future_time;
-//    psi_.setPlan(plan);
-//  }
-
-//  // Send out last plan for execution.
-//  // It is stamped with a time in the future, so it should be ok to send it now.
-//  if(psi_.hasNewPlan())
-//  {
-//    trajectory_execution_manager_->pushAndExecute(psi_.getPlan().trajectory_); // TODO should specify the controller huh?
-//    psi_.setPlanAsOld();
-//  }
-//  else
-//  {
-//    ROS_DEBUG("No plan saved, not executing anything.");
-//  }
-
-
-  last_goal_state_lock_.lock();
-
-  //double distance = planning_scene_->getCurrentState().distance(*last_goal_state_);
-
-  moveit_msgs::RobotTrajectory traj;
-  traj.joint_trajectory.points.resize(1);
-  traj.joint_trajectory.points[0].time_from_start = ros::Duration(config_.ik_traj_time);
-
-  const std::vector<kinematic_state::JointState*>& jsv = last_goal_state_->getJointStateGroup(group_name)->getJointStateVector();
-  traj.joint_trajectory.joint_names.resize(jsv.size());
-  traj.joint_trajectory.points[0].positions.resize(jsv.size());
-  traj.joint_trajectory.points[0].velocities.resize(jsv.size());
-  traj.joint_trajectory.header.frame_id = last_goal_state_->getKinematicModel()->getModelFrame();
-  traj.joint_trajectory.header.stamp = ros::Time(0);
-
-  // Now actually populate the joints...
-  for(int i = 0; i < jsv.size(); i++ )
+  for(size_t i = 0; i < states.size(); ++i)
   {
-    kinematic_state::JointState* js = jsv[i];
-    traj.joint_trajectory.joint_names[i] = js->getName();
-    traj.joint_trajectory.points[0].positions[i] = js->getVariableValues()[0];
-    traj.joint_trajectory.points[0].velocities[i] = 0.0;  // TODO could we estimate velocity?
+    const std::vector<kinematic_state::JointState*> jsv  = states[i]->getJointStateGroup(group_name)->getJointStateVector();
+
+    joint_trajectory.points[i].positions.resize(num_joints);
+    //joint_trajectory.points[i].velocities.resize(num_joints);
+
+    // Now actually populate the joints...
+    for(int j = 0; j < jsv.size(); j++ )
+    {
+      kinematic_state::JointState* js = jsv[j];
+      joint_trajectory.joint_names[j] = js->getName();
+      joint_trajectory.points[i].positions[j] = js->getVariableValues()[0];
+      //joint_trajectory.points[i].velocities[j] = 0.0;  // TODO could we estimate velocity?
+    }
   }
   last_goal_state_lock_.unlock();
+  smoother_.computeTimeStamps(joint_trajectory, limits, start_state);
+
+  if(future_time < ros::Time::now() + ros::Duration(0.001)) // TODO this offset is a (vetted) magic number...
+  {
+    ROS_WARN("Planning took too long, discarding result.");
+  }
+  else
+  {
+    ROS_DEBUG("Planning SUCCESS, saving plan.");
+    move_group_interface::MoveGroup::Plan plan;
+    plan.trajectory_.joint_trajectory = joint_trajectory;
+
+    if(config_.no_first_accel)
+      plan.trajectory_.joint_trajectory.points.front().accelerations.clear();
+    if(config_.no_last_accel)
+      plan.trajectory_.joint_trajectory.points.back().accelerations.clear();
+
+    plan.start_state_ = start_state;
+    plan.trajectory_.joint_trajectory.header.stamp = future_time;
+    psi_.setPlan(plan);
+  }
+
+  // Send out last plan for execution.
+  // It is stamped with a time in the future, so it should be ok to send it now.
+  if(psi_.hasNewPlan())
+  {
+    trajectory_execution_manager_->pushAndExecute(psi_.getPlan().trajectory_); // TODO should specify the controller huh?
+    psi_.setPlanAsOld();
+  }
+  else
+  {
+    ROS_DEBUG("No plan saved, not executing anything.");
+  }
 
 
-  trajectory_execution_manager_->pushAndExecute(traj); // TODO should specify the controller huh?
+//  last_goal_state_lock_.lock();
+
+//  //double distance = planning_scene_->getCurrentState().distance(*last_goal_state_);
+
+//  moveit_msgs::RobotTrajectory traj;
+//  traj.joint_trajectory.points.resize(1);
+//  traj.joint_trajectory.points[0].time_from_start = ros::Duration(config_.ik_traj_time);
+
+//  const std::vector<kinematic_state::JointState*>& jsv = last_goal_state_->getJointStateGroup(group_name)->getJointStateVector();
+//  traj.joint_trajectory.joint_names.resize(jsv.size());
+//  traj.joint_trajectory.points[0].positions.resize(jsv.size());
+//  traj.joint_trajectory.points[0].velocities.resize(jsv.size());
+//  traj.joint_trajectory.header.frame_id = last_goal_state_->getKinematicModel()->getModelFrame();
+//  traj.joint_trajectory.header.stamp = ros::Time(0);
+
+//  // Now actually populate the joints...
+//  for(int i = 0; i < jsv.size(); i++ )
+//  {
+//    kinematic_state::JointState* js = jsv[i];
+//    traj.joint_trajectory.joint_names[i] = js->getName();
+//    traj.joint_trajectory.points[0].positions[i] = js->getVariableValues()[0];
+//    traj.joint_trajectory.points[0].velocities[i] = 0.0;  // TODO could we estimate velocity?
+//  }
+//  last_goal_state_lock_.unlock();
+
+
+//  trajectory_execution_manager_->pushAndExecute(traj); // TODO should specify the controller huh?
 
 
   ROS_DEBUG("Done with TeleopIKUpdate");
@@ -817,16 +863,6 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
       if(config_.no_last_accel)
         plan.trajectory_.joint_trajectory.points.back().accelerations.clear();
 
-//      const std::map<std::string, unsigned int>& joint_index_map = start_state->getKinematicModel()->getJointVariablesIndexMap();
-//      if(config_.enforce_accel && req.start_state.joint_state.name.size() == req.start_state.joint_state.effort.size())
-//        for( size_t i = 0; i < plan.trajectory_.joint_trajectory.points[0].accelerations.size(); ++i)
-//        {
-//          const std::string& name = plan.trajectory_.joint_trajectory.joint_names[i];
-//          std::map<std::string, unsigned int>::const_iterator jim_it = joint_index_map.find(name);
-//          if(jim_it != joint_index_map.end())
-//            plan.trajectory_.joint_trajectory.points[0].accelerations[i] = req.start_state.joint_state.effort[jim_it->second];
-//        }
-
       plan.start_state_ = req.start_state;
       plan.trajectory_.joint_trajectory.header.stamp = future_time_limit;
       psi_.setPlan(plan);
@@ -921,18 +957,34 @@ void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
 
 void cat::CatBackend::publishErrorMetrics(const robot_interaction::RobotInteraction::EndEffector& eef)
 {
+  // Position and Angle Error
   tf::Pose link_pose, goal_pose;
   geometry_msgs::PoseStamped goal_pose_msg;
   query_goal_state_->getLastEndEffectorMarkerPose(eef, goal_pose_msg);
   tf::poseMsgToTF(goal_pose_msg.pose, goal_pose);
-  tf::poseEigenToTF(last_current_state_->getLinkState(eef.parent_link)->getGlobalLinkTransform(), link_pose);
+  kinematic_state::KinematicStatePtr state;
+  {
+    boost::mutex::scoped_lock slock(last_current_state_lock_);
+    state.reset( new kinematic_state::KinematicState(*last_current_state_) );
+  }
+  tf::poseEigenToTF(state->getLinkState(eef.parent_link)->getGlobalLinkTransform(), link_pose);
   tf::Vector3 trans_error = link_pose.getOrigin() - goal_pose.getOrigin();
   double distance = trans_error.length();
   double angle = link_pose.getRotation().angleShortestPath(goal_pose.getRotation());
+
+  // Wrench stuff
+  tf::Vector3 force, torque;
+  tf::vector3MsgToTF(last_wrench_.wrench.force, force);
+  tf::vector3MsgToTF(last_wrench_.wrench.torque, torque);
+  double f_mag = force.length();
+  double t_mag = torque.length();
+
   std_msgs::Float64MultiArray msg;
-  msg.data.resize(2);
-  msg.data[0] = distance; // just use distance for now
+  msg.data.resize(4);
+  msg.data[0] = distance;
   msg.data[1] = angle;
+  msg.data[2] = f_mag;
+  msg.data[3] = t_mag;
   publish_error_.publish(msg);
 }
 

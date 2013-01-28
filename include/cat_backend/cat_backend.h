@@ -44,7 +44,9 @@
 
 #include <moveit/kinematic_state/conversions.h>
 
-//#include <moveit/trajectory_processing/iterative_time_parameterization.h>
+#include <moveit/trajectory_processing/iterative_time_parameterization.h>
+
+#include <geometry_msgs/WrenchStamped.h>
 
 #include <tf/transform_listener.h>
 #include <moveit/plan_execution/plan_execution.h>
@@ -153,6 +155,7 @@ protected: // methods
 protected:
   void publishErrorMetrics(const robot_interaction::RobotInteraction::EndEffector& eef);
   void timerCallback();
+  void onNewWrench(const geometry_msgs::WrenchStamped::ConstPtr& wrench);
 
 
 protected: // members
@@ -183,6 +186,10 @@ protected: // members
   ros::Publisher publish_error_;
   ros::Publisher publish_zero_ft_;
 
+  // RSS stuff that hsould maybe come out?
+  ros::Subscriber subscribe_ft_wrench_;
+  geometry_msgs::WrenchStamped last_wrench_;
+
 
   BackgroundProcessing teleop_process_;
   BackgroundProcessing perception_process_;
@@ -197,7 +204,7 @@ protected: // members
 
   plan_interpolator::PlanInterpolator psi_;
 
-  //trajectory_processing::IterativeParabolicTimeParameterization smoother_;
+  trajectory_processing::IterativeParabolicTimeParameterization smoother_;
 
 
   moveit_msgs::WorkspaceParameters workspace_parameters_;
