@@ -45,6 +45,8 @@
   </include>
 
   <node name="$(arg cat_node_name)" launch-prefix="$(arg launch_prefix)" pkg="cat_backend" type="cat_backend_node" respawn="false" output="screen" args="$(arg command_args)">
+    <param name="warehouse_port" value="33829"/>
+    <param name="warehouse_host" value="localhost"/>
     <param name="allow_trajectory_execution" value="$(arg allow_trajectory_execution)"/>
     <param name="max_safe_path_cost" value="$(arg max_safe_path_cost)"/>
     <param name="planning_scene_monitor/publish_planning_scene" value="true"/>

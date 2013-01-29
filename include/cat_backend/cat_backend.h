@@ -30,30 +30,46 @@
 #ifndef _CAT_BACKEND_
 #define _CAT_BACKEND_
 
+
+// This must come before any files that include pluglinlib/class_loader.h
+// We don't know why...
+#include <moveit/warehouse/state_storage.h>
+
+// Other stuff
 #include <cat_backend/background_processing.h>
 #include <cat_backend/BackendConfig.h>
 #include <cat_backend/plan_interpolator.h>
 
 #include <moveit/robot_interaction/robot_interaction.h>
-
+#include <moveit/planning_pipeline/planning_pipeline.h>
+#include <moveit/trajectory_execution_manager/trajectory_execution_manager.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 #include <moveit/move_group/names.h>
+#include <moveit/move_group_interface/move_group.h>
+#include <moveit/trajectory_processing/trajectory_tools.h>
+
+
 #include <actionlib/server/simple_action_server.h>
 #include <moveit_msgs/MoveGroupAction.h>
-#include <moveit/move_group_interface/move_group.h>
 
 #include <moveit/kinematic_state/conversions.h>
 
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
 
+#include <tf/transform_listener.h>
+
 #include <geometry_msgs/WrenchStamped.h>
 
-#include <tf/transform_listener.h>
-#include <moveit/plan_execution/plan_execution.h>
-#include <moveit/trajectory_processing/trajectory_tools.h>
-#include <moveit/pick_place/pick_place.h>
 #include <boost/thread/mutex.hpp>
 #include <ros/ros.h>
+
+
+//namespace moveit_warehouse
+//{
+//class PlanningSceneStorage;
+//class ConstraintsStorage;
+//class RobotStateStorage;
+//}
 
 namespace cat
 {
@@ -153,9 +169,14 @@ protected: // methods
   std::string getCurrentPlanningGroup(void) const;
 
 protected:
+
+  void initWarehouse();
   void publishErrorMetrics(const robot_interaction::RobotInteraction::EndEffector& eef);
   void timerCallback();
   void onNewWrench(const geometry_msgs::WrenchStamped::ConstPtr& wrench);
+
+  void goToRobotState(const std::string& pose_name);
+  void fakeInteractiveMarkerFeedbackAtState(const kinematic_state::KinematicState& state);
 
 
 protected: // members
@@ -206,6 +227,7 @@ protected: // members
 
   trajectory_processing::IterativeParabolicTimeParameterization smoother_;
 
+  boost::shared_ptr<moveit_warehouse::RobotStateStorage> robot_state_storage_;
 
   moveit_msgs::WorkspaceParameters workspace_parameters_;
 

@@ -29,23 +29,27 @@
 
 /* Author: Adam Leeper */
 
-#include "cat_backend/cat_backend.h"
-#include "moveit/kinematic_state/conversions.h"
-#include <moveit/robot_interaction/robot_interaction.h>
+#include <cat_backend/cat_backend.h>
+#include <cat_backend/util.h>
+
 #include <moveit/kinematic_constraints/utils.h>
-#include <std_msgs/Float64MultiArray.h>
+#include <moveit/kinematic_state/conversions.h>
+#include <moveit/trajectory_processing/iterative_time_parameterization.h>
+
+#include <moveit/robot_interaction/robot_interaction.h>
+
+#include <boost/thread.hpp>
+#include <boost/thread/mutex.hpp>
+
 #include <tf_conversions/tf_eigen.h>
 #include <eigen_conversions/eigen_msg.h>
 #include <dynamic_reconfigure/server.h>
-#include <boost/thread.hpp>
-#include <boost/thread/mutex.hpp>
-#include <moveit/trajectory_processing/iterative_time_parameterization.h>
 
 
 
+#include <std_msgs/Float64MultiArray.h>
 #include <std_msgs/Bool.h>
 
-#include <cat_backend/util.h>
 
 
 // ====================================================================================================================
@@ -101,6 +105,12 @@ private:
       owner_->query_goal_state_->setInteractionMode( (config.ik_type == cat_backend::Backend_POSITION_IK) ?
                                                robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
                                              : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
+    }
+
+    if(level == cat_backend::Backend_TELEOP_COMMAND)
+    {
+      owner_->goToRobotState(config.saved_pose);
+      config.send_pose = owner_->config_.send_pose = false;
     }
 
     if(level == cat_backend::Backend_RESET_STATE)
@@ -259,6 +269,10 @@ cat::CatBackend::CatBackend(bool debug)
   subscribe_ft_wrench_ = root_node_handle_.subscribe<geometry_msgs::WrenchStamped>("/pr2_netft_zeroer/wrench_zeroed", 1,
                                                      boost::bind(&CatBackend::onNewWrench, this, _1));
 
+  // ===== Robot State Storage =====
+  initWarehouse();
+
+
   // ===== Get ready to go =====
   //addPerceptionJob(boost::bind(&CatBackend::updatePlanningScene, this));
 
@@ -273,6 +287,74 @@ cat::CatBackend::~CatBackend(void)
 {
   if(reconfigure_impl_)
     delete reconfigure_impl_;
+}
+
+void cat::CatBackend::initWarehouse()
+{
+  ROS_INFO("CAT backend: Initializing warehouse connection");
+  robot_state_storage_.reset(new moveit_warehouse::RobotStateStorage("localhost", 33829, 5.0));
+
+  std::vector<std::string> known_poses;
+  robot_state_storage_->getKnownRobotStates(known_poses);
+  for(size_t i = 0; i < known_poses.size(); ++i)
+  {
+    moveit_warehouse::RobotStateWithMetadata msg;
+    robot_state_storage_->getRobotState(msg, known_poses[i].c_str());
+    moveit_msgs::RobotState rs = static_cast<const moveit_msgs::RobotState&>(*msg);
+    ROS_INFO_STREAM("Found known pose " << known_poses[i].c_str() << ".");
+  }
+}
+
+void cat::CatBackend::goToRobotState(const std::string& pose_name)
+{
+  moveit_warehouse::RobotStateWithMetadata msg;
+  if(!robot_state_storage_->getRobotState(msg, pose_name))
+  {
+    ROS_ERROR("Requested robot state [%s] not found!", pose_name.c_str());
+    return;
+  }
+  moveit_msgs::RobotState rs = static_cast<const moveit_msgs::RobotState&>(*msg);
+
+  // update query state
+  updateInactiveGroupsFromCurrentRobot();
+
+  // construct state with saved pose
+  kinematic_state::KinematicStatePtr state(new kinematic_state::KinematicState(getKinematicModel()));
+  if(!kinematic_state::robotStateToKinematicState(rs, *state))
+  {
+    ROS_ERROR("Conversion of robot state to kinematic state failed (for some reason...)");
+    return;
+  }
+
+  std::map<std::string, double> variable_map;
+  state->getJointStateGroup(getCurrentPlanningGroup())->getVariableValues(variable_map);
+  kinematic_state::KinematicStatePtr new_state(new kinematic_state::KinematicState(*query_goal_state_->getState()));
+  new_state->setStateValues(variable_map);
+
+  ROS_INFO("Setting goal to state [%s]", pose_name.c_str());
+  query_goal_state_->setState(*new_state);
+  setAndPublishLastGoalState( new_state );
+  query_goal_state_->setControlsVisible(config_.show_controls);
+  // Renew markers
+  clearAndRenewInteractiveMarkers();
+  fakeInteractiveMarkerFeedbackAtState(*new_state);
+}
+
+void cat::CatBackend::fakeInteractiveMarkerFeedbackAtState(const kinematic_state::KinematicState& state)
+{
+  visualization_msgs::InteractiveMarkerFeedbackPtr fb(new visualization_msgs::InteractiveMarkerFeedback());
+  fb->event_type = fb->POSE_UPDATE;
+  const std::vector<robot_interaction::RobotInteraction::EndEffector>& aee = robot_interaction_->getActiveEndEffectors();
+  if(aee.size() == 0)
+    return;
+
+  // Only handle first one for now
+  const robot_interaction::RobotInteraction::EndEffector& eef = aee[0];
+  tf::poseEigenToMsg(state.getLinkState(eef.parent_link)->getGlobalLinkTransform(), fb->pose);
+  fb->header.frame_id = state.getKinematicModel()->getModelFrame();
+  fb->header.stamp = ros::Time(0);
+
+  query_goal_state_->handleEndEffector(eef, fb);
 }
 
 void cat::CatBackend::zeroFTSensor()

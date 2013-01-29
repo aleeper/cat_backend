@@ -385,7 +385,7 @@ Visualization Manager:
         Goal State Color: 250; 128; 0
         Interactive Marker Size: 0
         Joint Violation Color: 255; 0; 255
-        Planning Group: left_arm
+        Planning Group: right_arm
         Query Goal State: false
         Query Start State: false
         Show Workspace: false
@@ -1012,7 +1012,7 @@ Visualization Manager:
             Show Trail: false
             Value: true
         Robot Alpha: 0.3
-        Show Scene Robot: false
+        Show Scene Robot: true
       Value: true
     - Class: moveit_rviz_plugin/PlanningScene
       Enabled: true
@@ -2040,15 +2040,15 @@ Visualization Manager:
     Current:
       Class: rviz_animated_view_controller/Animated
       Control Mode: Orbit
-      Distance: 1.35753
+      Distance: 1.39103
       Eye:
-        X: 0.0198094
-        Y: 2.11147
-        Z: 0.986281
+        X: 1.36806
+        Y: 1.06124
+        Z: 1.28651
       Focus:
-        X: -0.0869298
-        Y: 0.767091
-        Z: 0.830918
+        X: 0.232991
+        Y: 0.434371
+        Z: 0.782905
       Maintain Vertical Axis: true
       Mouse Enabled: true
       Name: Current View
