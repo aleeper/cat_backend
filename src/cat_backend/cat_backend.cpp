@@ -45,6 +45,7 @@
 #include <eigen_conversions/eigen_msg.h>
 #include <dynamic_reconfigure/server.h>
 
+#include <fstream>
 
 
 #include <std_msgs/Float64MultiArray.h>
@@ -90,6 +91,7 @@ private:
       // Always want to set disabled on re-launch
       ROS_INFO("Dynamic reconfigure is setting initial settings");
       owner_->config_.teleop_mode = config.teleop_mode = cat_backend::Backend_TELEOP_DISABLE;
+      owner_->config_.record_data = config.record_data = false;
     }
 
     if(level == cat_backend::Backend_PLANNING_GROUP)
@@ -107,10 +109,23 @@ private:
                                              : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
     }
 
+    if(level == cat_backend::Backend_RECORD_DATA)
+    {
+      if(old_config.record_data == false && config.record_data == true)
+        if(!owner_->openDataFileForWriting(config.data_file))
+          owner_->config_.record_data = config.record_data = false;
+      if(old_config.record_data == true && config.record_data == false)
+        owner_->closeDataFile();
+    }
+
     if(level == cat_backend::Backend_TELEOP_COMMAND)
     {
-      owner_->goToRobotState(config.saved_pose);
-      config.send_pose = owner_->config_.send_pose = false;
+      if(config.send_pose_1)
+        owner_->goToRobotState(config.saved_pose_1);
+      if(config.send_pose_2)
+        owner_->goToRobotState(config.saved_pose_2);
+      config.send_pose_1 = owner_->config_.send_pose_1 = false;
+      config.send_pose_2 = owner_->config_.send_pose_1 = false;
     }
 
     if(level == cat_backend::Backend_RESET_STATE)
@@ -185,6 +200,7 @@ cat::CatBackend::CatBackend(bool debug)
   :
     node_handle_("~"),
     allow_trajectory_execution_(true),
+    record_data_(false),
     cycle_id_(0)
 {
   // ===== Dynamic Reconfigure houses some of the parameters used below =====
@@ -355,6 +371,47 @@ void cat::CatBackend::fakeInteractiveMarkerFeedbackAtState(const kinematic_state
   fb->header.stamp = ros::Time(0);
 
   query_goal_state_->handleEndEffector(eef, fb);
+}
+
+bool cat::CatBackend::openDataFileForWriting(const std::string& file_name)
+{
+  if(file_name.empty())
+  {
+    ROS_ERROR("Need to supply a file name for writing data!");
+    return false;
+  }
+  data_file_stream_.open(file_name.c_str());
+  if(!data_file_stream_.is_open())
+  {
+    ROS_ERROR("Failed to open file [%s] for writing!", file_name.c_str());
+    return false;
+  }
+
+  ROS_INFO("Opening data file [%s].", file_name.c_str());
+
+  // Write header
+  char header[100];
+  sprintf(header, "%10s %10s %10s %10s %10s \n", "Time", "distance", "angle", "f_mag", "t_mag");
+  data_file_stream_ << header;
+  //sprintf(header, "% 7.3f % 7.3f % 7.3f % 7.3f % 7.3f")
+  data_start_time_ = ros::Time::now();
+  record_data_ = true;
+
+  return true;
+}
+
+void cat::CatBackend::closeDataFile()
+{
+  if(data_file_stream_.is_open())
+  {
+    ROS_INFO("Closing data file.");
+    record_data_ = false;
+    data_file_stream_.close();
+  }
+  else
+  {
+    ROS_WARN("There was no data file to close... what happened?");
+  }
 }
 
 void cat::CatBackend::zeroFTSensor()
@@ -1060,6 +1117,14 @@ void cat::CatBackend::publishErrorMetrics(const robot_interaction::RobotInteract
   tf::vector3MsgToTF(last_wrench_.wrench.torque, torque);
   double f_mag = force.length();
   double t_mag = torque.length();
+
+  if(record_data_ && data_file_stream_.is_open())
+  {
+    char line[100];
+    ros::Duration time_from_start = ros::Time::now() - data_start_time_;
+    sprintf(line, "%10.3f %10.4f %10.4f %10.4f %10.4f \n", time_from_start.toSec(), distance, angle, f_mag, t_mag);
+    data_file_stream_ << line;
+  }
 
   std_msgs::Float64MultiArray msg;
   msg.data.resize(4);

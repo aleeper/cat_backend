@@ -178,6 +178,8 @@ protected:
   void goToRobotState(const std::string& pose_name);
   void fakeInteractiveMarkerFeedbackAtState(const kinematic_state::KinematicState& state);
 
+  bool openDataFileForWriting(const std::string& file_name);
+  void closeDataFile();
 
 protected: // members
 
@@ -207,10 +209,13 @@ protected: // members
   ros::Publisher publish_error_;
   ros::Publisher publish_zero_ft_;
 
-  // RSS stuff that hsould maybe come out?
+  // RSS stuff that should maybe come out?
   ros::Subscriber subscribe_ft_wrench_;
   geometry_msgs::WrenchStamped last_wrench_;
 
+  bool record_data_;
+  ros::Time data_start_time_;
+  std::ofstream data_file_stream_;
 
   BackgroundProcessing teleop_process_;
   BackgroundProcessing perception_process_;
