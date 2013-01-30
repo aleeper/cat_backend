@@ -641,8 +641,6 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
   }
 
   moveit_msgs::MotionPlanRequest req;
-  geometry_msgs::PoseStamped goal_pose;
-  getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[0], goal_pose);
   req.group_name = group_name;
   if(!psi_.getStateAtTime( future_time, future_start_state, req.start_state, config_.interpolate))
   {
@@ -651,11 +649,54 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
   }
   if(future_time < req.start_state.joint_state.header.stamp)
     future_time = req.start_state.joint_state.header.stamp;
-  req.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(aee[0].parent_link, goal_pose));
+
+  // Construct pose objective
+  {
+    geometry_msgs::PoseStamped goal_pose;
+    tf::Pose tf_pose;
+    getQueryGoalStateHandler()->getLastEndEffectorMarkerPose(aee[0], goal_pose);
+    // Add control offset
+    tf::poseMsgToTF(goal_pose.pose, tf_pose);
+    tf_pose.setOrigin(tf_pose.getOrigin() + tf_pose.getBasis().getColumn(0)*config_.offset_x);
+    tf::poseTFToMsg(tf_pose, goal_pose.pose);
+    req.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(aee[0].parent_link, goal_pose));
+    req.goal_constraints.back().position_constraints[0].target_point_offset.x = config_.offset_x;
+  }
+
+  // Construct posture objective
+  if(config_.cvx_ik_posture)
   {
     boost::mutex::scoped_lock slock(last_goal_state_lock_);
-    req.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(future_start_state->getJointStateGroup(group_name),
+    req.goal_constraints.push_back(kinematic_constraints::constructGoalConstraints(last_goal_state_->getJointStateGroup(group_name),
                                                                                                        .001, .001));
+  }
+  else{
+    const kinematic_model::JointModelGroup* jmg = getKinematicModel()->getJointModelGroup(group_name);
+    const std::map<std::string, unsigned int>& joint_index_map = jmg->getJointVariablesIndexMap();
+    std::map<std::string, unsigned int>::const_iterator jim_it;
+    moveit_msgs::Constraints c;
+    c.joint_constraints.resize(jmg->getJointModelNames().size());
+    int index = 0;
+    for(jim_it = joint_index_map.begin(); jim_it != joint_index_map.end(); ++jim_it, ++index)
+    {
+      const std::string& joint_name = jim_it->first;
+      //unsigned int joint_index = jim_it->second;
+
+      moveit_msgs::JointLimits limit = jmg->getJointModel(joint_name)->getVariableLimits()[0];
+      double qmin = 0, qmax = 0;
+      if(limit.has_position_limits)
+      {
+        qmin = limit.min_position;
+        qmax = limit.max_position;
+      }
+      moveit_msgs::JointConstraint jc;
+      jc.joint_name = joint_name;
+      jc.position = (qmax + qmin)/ 2.0;
+      jc.weight = limit.has_position_limits;
+      c.joint_constraints[index] = jc;
+      //ROS_INFO("Adding joint [%d] constraint [%.3f], weight [%.3f] for joint [%s]", index, jc.position, jc.weight, jc.joint_name.c_str());
+    }
+    req.goal_constraints.push_back(c);
   }
   req.num_planning_attempts = 1;
   req.allowed_planning_time = target_period*0.75;  // TODO mgic number!
@@ -1107,6 +1148,11 @@ void cat::CatBackend::publishErrorMetrics(const robot_interaction::RobotInteract
     state.reset( new kinematic_state::KinematicState(*last_current_state_) );
   }
   tf::poseEigenToTF(state->getLinkState(eef.parent_link)->getGlobalLinkTransform(), link_pose);
+
+  // Add control offsets
+  link_pose.setOrigin(link_pose.getOrigin() + link_pose.getBasis().getColumn(0)*config_.offset_x);
+  goal_pose.setOrigin(goal_pose.getOrigin() + goal_pose.getBasis().getColumn(0)*config_.offset_x);
+
   tf::Vector3 trans_error = link_pose.getOrigin() - goal_pose.getOrigin();
   double distance = trans_error.length();
   double angle = link_pose.getRotation().angleShortestPath(goal_pose.getRotation());

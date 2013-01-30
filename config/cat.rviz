@@ -1750,15 +1750,15 @@ Visualization Manager:
     Current:
       Class: rviz_animated_view_controller/Animated
       Control Mode: Orbit
-      Distance: 2.06217
+      Distance: 1.59408
       Eye:
-        X: 2.15191
-        Y: 0.764339
-        Z: 1.18148
+        X: 1.6762
+        Y: 0.606291
+        Z: 1.45997
       Focus:
-        X: 0.131403
-        Y: 0.446842
-        Z: 0.918215
+        X: 0.211273
+        Y: 0.659637
+        Z: 0.833695
       Maintain Vertical Axis: true
       Mouse Enabled: true
       Name: Current View
