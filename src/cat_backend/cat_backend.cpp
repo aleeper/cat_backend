@@ -35,6 +35,7 @@
 #include <moveit/kinematic_constraints/utils.h>
 #include <moveit/kinematic_state/conversions.h>
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
+#include <moveit/trajectory_processing/trajectory_tools.h>
 
 #include <moveit/robot_interaction/robot_interaction.h>
 
@@ -390,10 +391,13 @@ bool cat::CatBackend::openDataFileForWriting(const std::string& file_name)
   ROS_INFO("Opening data file [%s].", file_name.c_str());
 
   // Write header
-  char header[100];
-  sprintf(header, "%10s %10s %10s %10s %10s \n", "Time", "distance", "angle", "f_mag", "t_mag");
+  char header[256];
+  //sprintf(header, "%10s %10s %10s %10s %10s \n", "Time", "distance", "angle", "f_mag", "t_mag");
+  sprintf(header, "%10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s %10s \n", "Time",
+                                                 "distance", "angle", "f_mag", "t_mag",
+                                                 "master_x", "master_y", "master_z", "master_qw", "master_qx", "master_qy", "master_qz",
+                                                 "slave_x", "slave_y", "slave_z", "slave_qw", "slave_qx", "slave_qy", "slave_qz");
   data_file_stream_ << header;
-  //sprintf(header, "% 7.3f % 7.3f % 7.3f % 7.3f % 7.3f")
   data_start_time_ = ros::Time::now();
   record_data_ = true;
 
@@ -781,6 +785,16 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
     ROS_ERROR("Failed to copy the last current state, aborting planning request...");
     return;
   }
+  kinematic_state::KinematicStatePtr goal_state;
+  try{
+    boost::mutex::scoped_lock slock(last_goal_state_lock_);
+    goal_state.reset( new kinematic_state::KinematicState(*last_goal_state_));
+  }
+  catch(...)
+  {
+    ROS_ERROR("Failed to copy the last goal state, aborting planning request...");
+    return;
+  }
 
   moveit_msgs::RobotState start_state;
   if(!psi_.getStateAtTime( future_time, future_start_state, start_state, config_.interpolate))
@@ -791,58 +805,100 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
   if(future_time < start_state.joint_state.header.stamp)
     future_time = start_state.joint_state.header.stamp;
 
-  std::vector<moveit_msgs::JointLimits> limits = future_start_state->getKinematicModel()->getJointModelGroup(group_name)->getVariableLimits();
-  for(size_t i = 0; i < limits.size(); ++i)
+//  std::vector<moveit_msgs::JointLimits> limits = getKinematicModel()->getJointModelGroup(group_name)->getVariableLimits();
+//  for(size_t i = 0; i < limits.size(); ++i)
+//  {
+//    moveit_msgs::JointLimits& l = limits[i];
+//    if(l.has_velocity_limits)
+//      l.max_velocity *= config_.ik_speed_mult; // TODO magic number!
+//  }
+
+  const std::vector<moveit_msgs::JointLimits>& limits = getKinematicModel()->getJointModelGroup(group_name)->getVariableLimits();
+
+  // Find the largest joint change
+  int max_steps = 2;
+  const std::vector<std::string>& joint_names = getKinematicModel()->getJointModelGroup(group_name)->getJointModelNames();
+  for(size_t i = 0; i < joint_names.size(); ++i)
   {
-    moveit_msgs::JointLimits& l = limits[i];
-    if(l.has_velocity_limits)
-      l.max_velocity *= config_.ik_speed_mult; // TODO magic number!
+    double delta = fabs( goal_state->getJointState(joint_names[i])->getVariableValues()[0]
+                   - future_start_state->getJointState(joint_names[i])->getVariableValues()[0]);
+    if(limits[i].joint_name != joint_names[i])
+      ROS_WARN("Joint limitdoesn't match with joint name! This is bad!");
+    const moveit_msgs::JointLimits& limit = limits[i];
+    double range = 2*M_PI;
+    if(limit.has_position_limits)
+      range = limit.max_position - limit.min_position;
+    int steps = (int)((delta/range)*config_.ik_collision_res);
+    if(steps > max_steps)
+      max_steps = steps;
   }
+  //goal_state->distance()
+
+  // Grab the planning scene
+  scene_lock_.lock();
+  planning_scene::PlanningScenePtr scene = planning_scene_; // This ensures the underlying memory sticks around until we are done!
+  scene_lock_.unlock();
+
+  std::vector< kinematic_state::KinematicStatePtr > states;
+  states.reserve(max_steps);
+  states.push_back(future_start_state);
+  ros::Duration time_remaining = future_time - ros::Time::now();
+
+  for(int i = 1; i < max_steps; ++i)
+  {
+    kinematic_state::KinematicStatePtr middle_state( new kinematic_state::KinematicState(*goal_state) );
+    if(i < max_steps - 1) // More efficient to just keep the goal state the last time around!
+      future_start_state->interpolate(*goal_state, i/(double)(max_steps - 1.0), *middle_state);
+
+    if(!scene->isStateValid(*middle_state, group_name))
+      break;
+    states.push_back(middle_state);
+
+    time_remaining = future_time - ros::Time::now();
+    if( time_remaining.toSec() < config_.ik_reserve_time )
+      break;
+  }
+
+  // Reduce state count?
+  std::vector<kinematic_state::KinematicStatePtr> filtered_states;
+  filtered_states.reserve(states.size());
+  for(size_t i = 0; i < states.size() - 1; ++i)
+  {
+    if( 0 == (i % config_.ik_state_skip) )
+      filtered_states.push_back(states[i]);
+  }
+  // Always add the last state
+  filtered_states.push_back(states.back());
 
   trajectory_msgs::JointTrajectory joint_trajectory;
-
-
-
-  last_goal_state_lock_.lock();
-  int num_states = 4;
-  std::vector< kinematic_state::KinematicStatePtr > states(num_states);
-  states[0] = future_start_state;
-  for(int i = 1; i < num_states - 1; ++i)
-  {
-    kinematic_state::KinematicStatePtr middle_state( new kinematic_state::KinematicState(*future_start_state) );
-    future_start_state->interpolate(*last_goal_state_, i/(double)(num_states - 1.0), *middle_state);
-    states[i] = middle_state;
-  }
-  states[num_states - 1] = last_goal_state_;
-
-//  if( states.front()->size() != states.back()->size() )
-//  {
-//    ROS_ERROR("Joint vectors not the same size! Start has %zd while goal has %zd joints.", states[0]->size(), states[1]->size());
-//    return;
-//  }
-  int num_joints = states[0]->getJointStateGroup(group_name)->getJointStateVector().size();
-  joint_trajectory.joint_names.resize(num_joints);
-  joint_trajectory.points.resize(num_states);
-  joint_trajectory.header.frame_id = last_goal_state_->getKinematicModel()->getModelFrame();
+  kinematicStateVectorToJointTrajectory(filtered_states, group_name, joint_trajectory);
   joint_trajectory.header.stamp = future_time;
+  joint_trajectory.header.frame_id = getKinematicModel()->getModelFrame();
 
-  for(size_t i = 0; i < states.size(); ++i)
-  {
-    const std::vector<kinematic_state::JointState*> jsv  = states[i]->getJointStateGroup(group_name)->getJointStateVector();
+  trajectory_processing::unwindJointTrajectory(getKinematicModel(), joint_trajectory);
 
-    joint_trajectory.points[i].positions.resize(num_joints);
-    //joint_trajectory.points[i].velocities.resize(num_joints);
+//  int num_joints = states[0]->getJointStateGroup(group_name)->getJointStateVector().size();
+//  joint_trajectory.joint_names.resize(num_joints);
+//  joint_trajectory.points.resize(num_states);
+//  joint_trajectory.header.frame_id = goal_state->getKinematicModel()->getModelFrame();
+//  joint_trajectory.header.stamp = future_time;
 
-    // Now actually populate the joints...
-    for(int j = 0; j < jsv.size(); j++ )
-    {
-      kinematic_state::JointState* js = jsv[j];
-      joint_trajectory.joint_names[j] = js->getName();
-      joint_trajectory.points[i].positions[j] = js->getVariableValues()[0];
-      //joint_trajectory.points[i].velocities[j] = 0.0;  // TODO could we estimate velocity?
-    }
-  }
-  last_goal_state_lock_.unlock();
+//  for(size_t i = 0; i < states.size(); ++i)
+//  {
+//    const std::vector<kinematic_state::JointState*> jsv  = states[i]->getJointStateGroup(group_name)->getJointStateVector();
+
+//    joint_trajectory.points[i].positions.resize(num_joints);
+//    //joint_trajectory.points[i].velocities.resize(num_joints);
+
+//    // Now actually populate the joints...
+//    for(int j = 0; j < jsv.size(); j++ )
+//    {
+//      kinematic_state::JointState* js = jsv[j];
+//      joint_trajectory.joint_names[j] = js->getName();
+//      joint_trajectory.points[i].positions[j] = js->getVariableValues()[0];
+//      //joint_trajectory.points[i].velocities[j] = 0.0;  // TODO could we estimate velocity?
+//    }
+//  }
   smoother_.computeTimeStamps(joint_trajectory, limits, start_state);
 
   if(future_time < ros::Time::now() + ros::Duration(0.001)) // TODO this offset is a (vetted) magic number...
@@ -1166,9 +1222,17 @@ void cat::CatBackend::publishErrorMetrics(const robot_interaction::RobotInteract
 
   if(record_data_ && data_file_stream_.is_open())
   {
-    char line[100];
+    tf::Vector3&    gp = goal_pose.getOrigin();
+    tf::Quaternion gq = goal_pose.getRotation();
+    tf::Vector3&    sp = link_pose.getOrigin();
+    tf::Quaternion sq = link_pose.getRotation();
+
+    char line[256];
     ros::Duration time_from_start = ros::Time::now() - data_start_time_;
-    sprintf(line, "%10.3f %10.4f %10.4f %10.4f %10.4f \n", time_from_start.toSec(), distance, angle, f_mag, t_mag);
+    sprintf(line, "%10.3f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f \n",
+            time_from_start.toSec(), distance, angle, f_mag, t_mag,
+            gp.x(), gp.y(), gp.z(), gq.w(), gq.x(), gq.y(), gq.z(),
+            sp.x(), sp.y(), sp.z(), sq.w(), sq.x(), sq.y(), sq.z());
     data_file_stream_ << line;
   }
 
