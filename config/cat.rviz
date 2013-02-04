@@ -5,20 +5,20 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
-        - /Status1
-        - /Grid1
-        - /InteractiveMarkers1
+        - /MotionPlanning1
         - /MotionPlanning1/Scene Geometry1
         - /MotionPlanning1/Scene Robot1
         - /MotionPlanning1/Planning Request1
-        - /GoalRobot1/Scene Geometry1
+        - /GoalRobot1
         - /GoalRobot1/Scene Robot1
+        - /CurrentRobot1
         - /CurrentRobot1/Scene Robot1
+        - /WorldScene1
         - /WorldScene1/Scene Geometry1
-        - /CursorRight1
-        - /InteractiveMarkers2
+        - /DepthCloud1
+        - /InteractionCursorDisplay1
       Splitter Ratio: 0.5
-    Tree Height: 575
+    Tree Height: 567
   - Class: rviz/Selection
     Name: Selection
   - Class: rviz/Tool Properties
@@ -41,7 +41,7 @@ Visualization Manager:
     - Alpha: 0.5
       Cell Size: 1
       Class: rviz/Grid
-      Color: 160; 160; 164
+      Color: 126; 126; 129
       Enabled: true
       Line Style:
         Line Width: 0.03
@@ -383,13 +383,13 @@ Visualization Manager:
         Goal State Color: 250; 128; 0
         Interactive Marker Size: 0
         Joint Violation Color: 255; 0; 255
-        Planning Group: right_arm
+        Planning Group: left_arm
         Query Goal State: false
         Query Start State: false
         Show Workspace: false
         Start State Alpha: 1
         Start State Color: 0; 255; 0
-      Planning Scene Topic: /cat_backend_node/monitored_planning_scene
+      Planning Scene Topic: /planning_scene
       Robot Description: robot_description
       Scene Geometry:
         Scene Alpha: 0.9
@@ -1325,7 +1325,7 @@ Visualization Manager:
       Robot Description: robot_description
       Scene Geometry:
         Scene Alpha: 1
-        Scene Color: 50; 230; 50
+        Scene Color: 230; 104; 66
         Scene Display Time: 0.05
         Show Scene Geometry: true
       Scene Robot:
@@ -1666,33 +1666,9 @@ Visualization Manager:
         Min Color: 0; 0; 0
         Value: true
       Value: false
-    - Axes Length: 0.03
-      Axes Radius: 0.01
-      Class: rviz/InteractionCursorDisplay
-      Cursor Alpha: 1
-      Cursor Color: 80; 255; 20
-      Cursor Diameter: 0.05
-      Enabled: true
-      Name: CursorRight
-      Show Axes: true
-      Show Cursor: true
-      Update Topic: /interaction_cursor_right/update
-      Value: true
-    - Axes Length: 0.03
-      Axes Radius: 0.01
-      Class: rviz/InteractionCursorDisplay
-      Cursor Alpha: 1
-      Cursor Color: 80; 255; 20
-      Cursor Diameter: 0.05
-      Enabled: true
-      Name: CursorLeft
-      Show Axes: true
-      Show Cursor: true
-      Update Topic: /interaction_cursor_left/update
-      Value: true
     - Alpha: 1
       Auto Size: true
-      Auto Size Factor: 1
+      Auto Size Factor: 3
       Autocompute Intensity Bounds:
         Max Intensity: 4096
         Min Intensity: 0
@@ -1732,10 +1708,22 @@ Visualization Manager:
       Show Descriptions: true
       Update Topic: /robot_interaction_interactive_marker_topic/update
       Value: false
+    - Axes Length: 0.025
+      Axes Radius: 0.01
+      Class: rviz/InteractionCursorDisplay
+      Cursor Alpha: 1
+      Cursor Color: 80; 255; 20
+      Cursor Diameter: 0.04
+      Enabled: true
+      Name: InteractionCursorDisplay
+      Show Axes: true
+      Show Cursor: true
+      Update Topic: /interaction_cursor_right/update
+      Value: true
   Enabled: true
   Global Options:
-    Background Color: 48; 48; 48
-    Fixed Frame: /odom_combined
+    Background Color: 255; 255; 255
+    Fixed Frame: /base_link
   Name: root
   Tools:
     - Class: rviz/MoveCamera
@@ -1750,21 +1738,21 @@ Visualization Manager:
     Current:
       Class: rviz_animated_view_controller/Animated
       Control Mode: Orbit
-      Distance: 1.69937
+      Distance: 2.60684
       Eye:
-        X: 2.03387
-        Y: 0.978049
-        Z: 1.21145
+        X: -2.60147
+        Y: 0.00764752
+        Z: 0.427098
       Focus:
-        X: 0.475633
-        Y: 0.444146
-        Z: 0.793479
+        X: 0.00438936
+        Y: -0.00687247
+        Z: 0.357189
       Maintain Vertical Axis: true
       Mouse Enabled: true
       Name: Current View
-      Near Clip Distance: 0.01
+      Near Clip Distance: 0.3
       Placement Topic: /rviz/camera_placement
-      Target Frame: /base_link
+      Target Frame: /user1_frame
       Transition Time: 0.5
       Up:
         X: 0
@@ -1841,15 +1829,130 @@ Visualization Manager:
           Y: 0
           Z: 1
         Value: Animated (rviz_animated_view_controller)
+      - Class: rviz_animated_view_controller/Animated
+        Control Mode: Orbit
+        Distance: 1.65601
+        Eye:
+          X: 1.77868
+          Y: 1.00561
+          Z: 0.5671
+        Focus:
+          X: 0.128986
+          Y: 0.929242
+          Z: 0.444425
+        Maintain Vertical Axis: true
+        Mouse Enabled: true
+        Name: Workspace Screenshots
+        Near Clip Distance: 0.01
+        Placement Topic: /rviz/camera_placement
+        Target Frame: /base_link
+        Transition Time: 0.5
+        Up:
+          X: 0
+          Y: 0
+          Z: 1
+        Value: Animated (rviz_animated_view_controller)
+      - Class: rviz_animated_view_controller/Animated
+        Control Mode: Orbit
+        Distance: 1.9633
+        Eye:
+          X: 0.716781
+          Y: 2.26296
+          Z: 0.908853
+        Focus:
+          X: 0.450938
+          Y: 0.320959
+          Z: 0.796904
+        Maintain Vertical Axis: true
+        Mouse Enabled: true
+        Name: Table Screenshot
+        Near Clip Distance: 0.01
+        Placement Topic: /rviz/camera_placement
+        Target Frame: /base_link
+        Transition Time: 0.5
+        Up:
+          X: 0
+          Y: 0
+          Z: 1
+        Value: Animated (rviz_animated_view_controller)
+      - Class: rviz_animated_view_controller/Animated
+        Control Mode: Orbit
+        Distance: 1.8555
+        Eye:
+          X: -1.85041
+          Y: 0.00346231
+          Z: 0.406948
+        Focus:
+          X: 0.00438935
+          Y: -0.00687247
+          Z: 0.357189
+        Maintain Vertical Axis: true
+        Mouse Enabled: false
+        Name: Animated
+        Near Clip Distance: 0.2
+        Placement Topic: /rviz/camera_placement
+        Target Frame: /user1_frame
+        Transition Time: 0.5
+        Up:
+          X: 0
+          Y: 0
+          Z: 1
+        Value: Animated (rviz_animated_view_controller)
+      - Class: rviz_animated_view_controller/Animated
+        Control Mode: Orbit
+        Distance: 1.8555
+        Eye:
+          X: -1.85041
+          Y: 0.0034623
+          Z: 0.406948
+        Focus:
+          X: 0.00438936
+          Y: -0.00687247
+          Z: 0.357189
+        Maintain Vertical Axis: true
+        Mouse Enabled: false
+        Name: Animated
+        Near Clip Distance: 0.3
+        Placement Topic: /rviz/camera_placement
+        Target Frame: /user1_frame
+        Transition Time: 0.5
+        Up:
+          X: 0
+          Y: 0
+          Z: 1
+        Value: Animated (rviz_animated_view_controller)
+      - Class: rviz_animated_view_controller/Animated
+        Control Mode: Orbit
+        Distance: 1.8555
+        Eye:
+          X: -1.85041
+          Y: 0.0034623
+          Z: 0.406948
+        Focus:
+          X: 0.00438936
+          Y: -0.00687247
+          Z: 0.357189
+        Maintain Vertical Axis: true
+        Mouse Enabled: false
+        Name: Shelf View
+        Near Clip Distance: 0.3
+        Placement Topic: /rviz/camera_placement
+        Target Frame: /user1_frame
+        Transition Time: 0.5
+        Up:
+          X: 0
+          Y: 0
+          Z: 1
+        Value: Animated (rviz_animated_view_controller)
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1212
-  Hide Left Dock: true
+  Height: 1552
+  Hide Left Dock: false
   Hide Right Dock: false
   Motion Planning:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd0000000400000000000002a200000471fc0200000004fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000006400fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017a00000001000002a200000440fc0200000004fb000000100044006900730070006c006100790073010000004100000280000000dd00fffffffc000002c7000001ba000001850100001dfa000000000100000002fb0000001e004d006f00740069006f006e00200050006c0061006e006e0069006e00670100000000ffffffff000002a200fffffffb0000000a005600690065007700730100000461000002a20000010f00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000004a00000003efc0100000002fb0000000800540069006d00650000000000000004a0000002bf00fffffffb0000000800540069006d006501000000000000045000000000000000000000035e0000044000000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000400000000000002a200000471fc0200000004fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000006400fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017a00000001000002bf00000595fc0200000004fb000000100044006900730070006c006100790073010000004100000278000000dd00fffffffc000002bf00000317000001850100001dfa000000010100000002fb0000001e004d006f00740069006f006e00200050006c0061006e006e0069006e00670100000000ffffffff000002a200fffffffb0000000a005600690065007700730100000461000002a20000010f00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000004a00000003efc0100000002fb0000000800540069006d00650000000000000004a0000002bf00fffffffb0000000800540069006d006501000000000000045000000000000000000000073b0000059500000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:
@@ -1858,6 +1961,6 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: false
-  Width: 1544
-  X: 788
-  Y: -10
+  Width: 2560
+  X: -1
+  Y: -88

@@ -109,7 +109,7 @@ protected: // methods
   void computeTeleopUpdate(const ros::Duration& target_period);
   void computeTeleopJTUpdate(const ros::Duration& target_period);
   void computeTeleopIKUpdate(const ros::Duration& target_period);
-  void computeTeleopMPUpdate(const ros::Duration& target_period);
+  bool computeTeleopMPUpdate(const ros::Duration& target_period);
   void computeTeleopCVXUpdate(const ros::Duration& target_period);
   bool generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
                     kinematic_state::KinematicStatePtr &start_state,

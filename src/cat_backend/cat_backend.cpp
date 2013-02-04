@@ -522,6 +522,8 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
   ros::Time update_start_time = ros::Time::now();
   cycle_id_ += 1;
 
+  // Hack to give MP more time.
+  bool success = true;
   try
   {
     switch(config_.teleop_mode)
@@ -533,7 +535,7 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
         computeTeleopIKUpdate(target_period);
         break;
       case(cat_backend::Backend_TELEOP_MP):
-        computeTeleopMPUpdate(target_period);
+        success = computeTeleopMPUpdate(target_period);
         break;
       case(cat_backend::Backend_TELEOP_CVX):
         computeTeleopCVXUpdate(target_period);
@@ -555,7 +557,7 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
   ros::Duration time_used = ros::Time::now() - update_start_time;
   ros::Duration remaining_time = target_period - time_used - ros::Duration(0.001); // TODO magic number!
   ros::Duration next_cycle_allowed_time(config_.target_period); // default
-  if(remaining_time.toSec() < 0.0)
+  if( !success || remaining_time.toSec() < 0.0 )
   {
     remaining_time = ros::Duration(0.0);
     next_cycle_allowed_time.fromSec( target_period.toSec() * config_.growth_factor );
@@ -571,7 +573,10 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
     {
       ROS_INFO("Cycle [%d] Time used: %.3f sec, sleeping for %.3f sec, next cycle target is %.3f sec",
                cycle_id_, time_used.toSec(), remaining_time.toSec(), next_cycle_allowed_time.toSec());
-      remaining_time.sleep();
+      if(remaining_time.toSec() < 10.0)
+        remaining_time.sleep();
+      else
+        ros::Duration(10.0).sleep();
     }
     else
       ROS_INFO("Cycle [%d] Time used: %.3f sec of %.3f sec allowed (%.1f %%), next cycle target is %.3f",
@@ -581,6 +586,8 @@ void cat::CatBackend::computeTeleopUpdate(const ros::Duration& target_period)
               next_cycle_allowed_time.toSec());
   }
 
+  if(next_cycle_allowed_time.toSec() > 10.0)
+    next_cycle_allowed_time.fromSec( 10.0 );
   // When all is done, it gets ready to call itself again!
   if(config_.teleop_mode != cat_backend::Backend_TELEOP_DISABLE)
     addTeleopJob(boost::bind(&CatBackend::computeTeleopUpdate, this, next_cycle_allowed_time));
@@ -875,7 +882,7 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
   joint_trajectory.header.stamp = future_time;
   joint_trajectory.header.frame_id = getKinematicModel()->getModelFrame();
 
-  trajectory_processing::unwindJointTrajectory(getKinematicModel(), joint_trajectory);
+  //trajectory_processing::unwindJointTrajectory(getKinematicModel(), joint_trajectory);
 
 //  int num_joints = states[0]->getJointStateGroup(group_name)->getJointStateVector().size();
 //  joint_trajectory.joint_names.resize(num_joints);
@@ -999,13 +1006,13 @@ std::string cat::CatBackend::getCurrentPlannerId()
 // ============================================================================
 // ============================= Motion Planning ==============================
 // ============================================================================
-void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
+bool cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
 {
   ros::Time future_time = ros::Time::now() + target_period;
   ROS_DEBUG("TeleopMPUpdate!");
   std::string group_name = getCurrentPlanningGroup();
   if (group_name.empty())
-    return;
+    return true; // TODO HACK!!
 
   kinematic_state::KinematicStatePtr future_start_state;
   try{
@@ -1015,7 +1022,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   catch(...)
   {
     ROS_ERROR("Failed to copy the last current state, aborting planning request...");
-    return;
+    return true; // TODO HACK!!
   }
 
   ROS_DEBUG("Formulating planning request");
@@ -1025,7 +1032,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   if(!psi_.getStateAtTime( future_time, future_start_state, req.start_state, config_.interpolate))
   {
     ROS_DEBUG("Getting ahead of ourselves, waiting for next cycle...");
-    return;
+    return true; // TODO HACK!!
   }
   if(future_time < req.start_state.joint_state.header.stamp)
     future_time = req.start_state.joint_state.header.stamp;
@@ -1039,7 +1046,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
   last_goal_state_lock_.unlock();
 
   moveit_msgs::MotionPlanResponse result;
-  generatePlan(ompl_planning_pipeline_, future_start_state, req, result, future_time);
+  bool success = generatePlan(ompl_planning_pipeline_, future_start_state, req, result, future_time);
 
   // ==========================================
   // Send out last plan for execution.
@@ -1054,6 +1061,7 @@ void cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
     ROS_DEBUG("No plan saved, not executing anything.");
   }
   ROS_DEBUG("Done with TeleopMPUpdate");
+  return success;
 }
 
 bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
