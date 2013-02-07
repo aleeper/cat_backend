@@ -30,7 +30,7 @@ void PlanInterpolator::findIndexAtTimeFromStart(const ros::Duration& time, int& 
     interpolate = (time - before_time).toSec() / interval.toSec();
 }
 
-bool PlanInterpolator::getStateAtTime(const ros::Time &request_time, kinematic_state::KinematicStatePtr& start_state,
+bool PlanInterpolator::getStateAtTime(const ros::Time &request_time, robot_state::RobotStatePtr& start_state,
                                        moveit_msgs::RobotState& rs, bool do_interpolate)
 {
   if(plan_is_valid_ && current_plan_ && current_plan_->trajectory_.joint_trajectory.points.size() >= 2)
@@ -45,9 +45,9 @@ bool PlanInterpolator::getStateAtTime(const ros::Time &request_time, kinematic_s
       diff_time = ros::Duration(0);
     }
 
-    kinematic_state::KinematicStatePtr future_start_state_1, future_start_state_2;
-    future_start_state_1.reset( new kinematic_state::KinematicState(*start_state));
-    future_start_state_2.reset( new kinematic_state::KinematicState(*start_state));
+    robot_state::RobotStatePtr future_start_state_1, future_start_state_2;
+    future_start_state_1.reset( new robot_state::RobotState(*start_state));
+    future_start_state_2.reset( new robot_state::RobotState(*start_state));
 
     int before=0, after=0;
     double interpolation = 1.0;
@@ -82,7 +82,7 @@ bool PlanInterpolator::getStateAtTime(const ros::Time &request_time, kinematic_s
       }
     }
     // Copy to msg
-    kinematic_state::kinematicStateToRobotState(*start_state, rs);
+    robot_state::robotStateToRobotStateMsg(*start_state, rs);
     rs.joint_state.header.stamp = output_time;
 
     std::map<std::string, std::pair<double, double> > velocity_map;
@@ -149,7 +149,7 @@ bool PlanInterpolator::getStateAtTime(const ros::Time &request_time, kinematic_s
   else
   {
     ROS_DEBUG("No stored plan, just returning input state...");
-    kinematic_state::kinematicStateToRobotState(*start_state, rs);
+    robot_state::robotStateToRobotStateMsg(*start_state, rs);
     rs.joint_state.header.stamp = ros::Time(0);
   }
   return true;

@@ -52,7 +52,7 @@
 #include <actionlib/server/simple_action_server.h>
 #include <moveit_msgs/MoveGroupAction.h>
 
-#include <moveit/kinematic_state/conversions.h>
+#include <moveit/robot_state/conversions.h>
 
 #include <moveit/trajectory_processing/iterative_time_parameterization.h>
 
@@ -98,7 +98,7 @@ protected: // methods
 
   void clearAndRenewInteractiveMarkers(void);
   void changedPlanningGroup(void);
-  bool isIKSolutionCollisionFree(kinematic_state::JointStateGroup *group, const std::vector<double> &ik_solution) const;
+  bool isIKSolutionCollisionFree(robot_state::JointStateGroup *group, const std::vector<double> &ik_solution) const;
 
   void executeMainLoopJobs(void);
   void updateBackgroundJobProgressBar(void);
@@ -112,9 +112,9 @@ protected: // methods
   bool computeTeleopMPUpdate(const ros::Duration& target_period);
   void computeTeleopCVXUpdate(const ros::Duration& target_period);
   bool generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
-                    kinematic_state::KinematicStatePtr &start_state,
-                    moveit_msgs::MotionPlanRequest &req,
-                    moveit_msgs::MotionPlanResponse &res, const ros::Time &future_time_limit);
+                    robot_state::RobotStatePtr &start_state,
+                    planning_interface::MotionPlanRequest &req,
+                    planning_interface::MotionPlanResponse &res, const ros::Time &future_time_limit);
 
   std::string getCurrentPlannerId();
 
@@ -125,12 +125,12 @@ protected: // methods
   std::string modeToStr(int mode);
 
 
-//  const kinematic_state::KinematicStatePtr& getQueryStartState(void) const
+//  const robot_state::RobotStatePtr& getQueryStartState(void) const
 //  {
 //    return query_start_state_->getState();
 //  }
 
-//  const kinematic_state::KinematicStateConstPtr& getQueryGoalState(void) const
+//  const robot_state::RobotStateConstPtr& getQueryGoalState(void) const
 //  {
 //    return query_goal_state_->getState();
 //  }
@@ -150,15 +150,15 @@ protected: // methods
     return query_goal_state_;
   }
 
-//  void setQueryStartState(const kinematic_state::KinematicStatePtr &start);
-//  void setQueryGoalState(const kinematic_state::KinematicStatePtr &goal);
+//  void setQueryStartState(const robot_state::RobotStatePtr &start);
+//  void setQueryGoalState(const robot_state::RobotStatePtr &goal);
 
 //  void updateQueryStartState(void);
 //  void updateQueryGoalState(void);
 
   void onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih, bool needs_refresh);
 
-  void setAndPublishLastGoalState(const kinematic_state::KinematicStateConstPtr& state);
+  void setAndPublishLastGoalState(const robot_state::RobotStateConstPtr& state);
 
   void setAndPublishLastCurrentState(const sensor_msgs::JointStateConstPtr &joint_state);
 
@@ -176,7 +176,7 @@ protected:
   void onNewWrench(const geometry_msgs::WrenchStamped::ConstPtr& wrench);
 
   void goToRobotState(const std::string& pose_name);
-  void fakeInteractiveMarkerFeedbackAtState(const kinematic_state::KinematicState& state);
+  void fakeInteractiveMarkerFeedbackAtState(const robot_state::RobotState& state);
 
   bool openDataFileForWriting(const std::string& file_name);
   void closeDataFile();
@@ -186,8 +186,8 @@ protected: // members
   // robot interaction
   robot_interaction::RobotInteractionPtr robot_interaction_;
   robot_interaction::RobotInteraction::InteractionHandlerPtr query_goal_state_;
-  kinematic_state::KinematicStatePtr last_goal_state_;
-  kinematic_state::KinematicStatePtr last_current_state_;
+  robot_state::RobotStatePtr last_goal_state_;
+  robot_state::RobotStatePtr last_current_state_;
 
 
   boost::shared_ptr<tf::TransformListener> tfl_;

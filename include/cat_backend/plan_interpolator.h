@@ -4,8 +4,8 @@
 
 #include <moveit/move_group/names.h>
 #include <moveit/move_group_interface/move_group.h>
-#include <moveit/kinematic_state/conversions.h>
-#include <moveit/kinematic_state/kinematic_state.h>
+#include <moveit/robot_state/conversions.h>
+#include <moveit/robot_state/robot_state.h>
 #include <ros/console.h>
 
 namespace plan_interpolator
@@ -19,7 +19,7 @@ public:
 
   void findIndexAtTimeFromStart(const ros::Duration& time, int& before, int& after, double &interpolate);
 
-  bool getStateAtTime(const ros::Time &request_time, kinematic_state::KinematicStatePtr& start_state,
+  bool getStateAtTime(const ros::Time &request_time, robot_state::RobotStatePtr& start_state,
                       moveit_msgs::RobotState& rs, bool do_interpolate);
 
   void printPlan();
