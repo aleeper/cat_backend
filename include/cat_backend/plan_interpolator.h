@@ -6,7 +6,9 @@
 #include <moveit/move_group_interface/move_group.h>
 #include <moveit/robot_state/conversions.h>
 #include <moveit/robot_state/robot_state.h>
+#include <moveit/robot_trajectory/robot_trajectory.h>
 #include <ros/console.h>
+
 
 namespace plan_interpolator
 {

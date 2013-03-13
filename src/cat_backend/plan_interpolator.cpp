@@ -1,5 +1,6 @@
 #include <cat_backend/plan_interpolator.h>
 
+
 namespace plan_interpolator
 {
 
@@ -166,4 +167,4 @@ void PlanInterpolator::printPlan()
   }
 }
 
-} //namespace cat
+} //namespace

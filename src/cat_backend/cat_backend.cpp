@@ -40,6 +40,8 @@
 
 #include <moveit/robot_interaction/robot_interaction.h>
 
+#include <moveit_msgs/DisplayRobotState.h>
+
 #include <boost/thread.hpp>
 #include <boost/thread/mutex.hpp>
 
@@ -167,15 +169,19 @@ private:
       {
       case cat_backend::Backend_TELEOP_JT:
         owner_->config_.target_period = config.target_period = 0.03333; // TODO magic number! (parameter?)
+        owner_->show_ik_solution_ = false;
         break;
       case cat_backend::Backend_TELEOP_IK:
         owner_->config_.target_period = config.target_period = 0.03333; // TODO magic number! (parameter?)
+        owner_->show_ik_solution_ = true;
         break;
       case cat_backend::Backend_TELEOP_MP:
         owner_->config_.target_period = config.target_period = 0.3; // TODO magic number! (parameter?)
+        owner_->show_ik_solution_ = true;
         break;
       case cat_backend::Backend_TELEOP_CVX:
         owner_->config_.target_period = config.target_period = 0.03333; // TODO magic number! (parameter?)
+        owner_->show_ik_solution_ = false;
         break;
       default:
         // do nothing
@@ -202,6 +208,7 @@ cat::CatBackend::CatBackend(bool debug)
   :
     node_handle_("~"),
     allow_trajectory_execution_(true),
+    show_ik_solution_(true),
     record_data_(false),
     cycle_id_(0)
 {
@@ -216,7 +223,7 @@ cat::CatBackend::CatBackend(bool debug)
   std::string robot_description_name;
   node_handle_.param("robot_description_name", robot_description_name, std::string("robot_description"));
   planning_scene_monitor_.reset(new planning_scene_monitor::PlanningSceneMonitor(robot_description_name, tfl_));
-  if (planning_scene_monitor_->getPlanningScene() && planning_scene_monitor_->getPlanningScene()->isConfigured())
+  if (planning_scene_monitor_->getPlanningScene() )
   {
     // External scenes (that we load?)
     planning_scene_monitor_->startSceneMonitor();
@@ -238,9 +245,9 @@ cat::CatBackend::CatBackend(bool debug)
 
   // ===== Planning =====
   ROS_INFO("CAT backend: Initializing planning pipelines");
-  ompl_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
+  ompl_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getRobotModel(),
                                                                         "planning_plugin", "request_adapters"));
-  cat_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getKinematicModel(),
+  cat_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getRobotModel(),
                                                                        "cat/planning_plugin", "cat/request_adapters"));
   cat_planning_pipeline_->checkSolutionPaths(false);
 
@@ -257,16 +264,18 @@ cat::CatBackend::CatBackend(bool debug)
   if (allow_trajectory_execution_)
   {
     ROS_INFO("CAT backend: Initializing trajectory execution manager");
-    trajectory_execution_manager_.reset(new trajectory_execution_manager::TrajectoryExecutionManager(planning_scene_monitor_->getKinematicModel()));
+    trajectory_execution_manager_.reset(new trajectory_execution_manager::TrajectoryExecutionManager(planning_scene_monitor_->getRobotModel()));
   }
   publish_cartesian_goal_right_ = root_node_handle_.advertise<geometry_msgs::PoseStamped>(CARTESIAN_RIGHT_ARM + CARTESIAN_COMMAND_SUFFIX, 1);
   publish_cartesian_goal_left_ = root_node_handle_.advertise<geometry_msgs::PoseStamped>(CARTESIAN_LEFT_ARM + CARTESIAN_COMMAND_SUFFIX, 1);
 
   // ===== Visualization =====
   ROS_INFO("CAT backend: Initializing robot interaction tools");
-  publish_goal_state_ = node_handle_.advertise<moveit_msgs::PlanningScene>("goal_state_robot", 1);
-  publish_current_state_ = node_handle_.advertise<moveit_msgs::PlanningScene>("current_state_robot", 1);
-  robot_interaction_.reset(new robot_interaction::RobotInteraction(getKinematicModel(), "cat_backend"));
+//  publish_goal_state_ = node_handle_.advertise<moveit_msgs::PlanningScene>("goal_state_robot", 1);
+//  publish_current_state_ = node_handle_.advertise<moveit_msgs::PlanningScene>("current_state_robot", 1);
+  publish_goal_state_ = node_handle_.advertise<moveit_msgs::DisplayRobotState>("goal_state_robot", 1);
+  publish_current_state_ = node_handle_.advertise<moveit_msgs::DisplayRobotState>("current_state_robot", 1);
+  robot_interaction_.reset(new robot_interaction::RobotInteraction(getRobotModel(), "cat_backend"));
   robot_state::RobotStatePtr ks(new robot_state::RobotState(getPlanningSceneRO()->getCurrentState()));
   last_goal_state_.reset(new robot_state::RobotState(*ks));
   last_current_state_.reset(new robot_state::RobotState(*ks));
@@ -281,7 +290,8 @@ cat::CatBackend::CatBackend(bool debug)
                                          : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
 
   // ===== RSS Metrics =====
-  timer_ = root_node_handle_.createTimer(ros::Duration(0.01), boost::bind(&CatBackend::timerCallback, this));
+  //ROS_INFO("CAT backend: Metric publishers");
+  //timer_ = root_node_handle_.createTimer(ros::Duration(0.01), boost::bind(&CatBackend::timerCallback, this));
   publish_error_ = node_handle_.advertise<std_msgs::Float64MultiArray>("metrics/error_magnitude", 10);
   publish_zero_ft_ = root_node_handle_.advertise<std_msgs::Bool>("/pr2_netft_zeroer/rezero_wrench", 1);
   subscribe_ft_wrench_ = root_node_handle_.subscribe<geometry_msgs::WrenchStamped>("/pr2_netft_zeroer/wrench_zeroed", 1,
@@ -337,7 +347,7 @@ void cat::CatBackend::goToRobotState(const std::string& pose_name)
   updateInactiveGroupsFromCurrentRobot();
 
   // construct state with saved pose
-  robot_state::RobotStatePtr state(new robot_state::RobotState(getKinematicModel()));
+  robot_state::RobotStatePtr state(new robot_state::RobotState(getRobotModel()));
   if(!robot_state::robotStateMsgToRobotState(rs, *state))
   {
     ROS_ERROR("Conversion of robot state to kinematic state failed (for some reason...)");
@@ -369,7 +379,7 @@ void cat::CatBackend::fakeInteractiveMarkerFeedbackAtState(const robot_state::Ro
   // Only handle first one for now
   const robot_interaction::RobotInteraction::EndEffector& eef = aee[0];
   tf::poseEigenToMsg(state.getLinkState(eef.parent_link)->getGlobalLinkTransform(), fb->pose);
-  fb->header.frame_id = state.getKinematicModel()->getModelFrame();
+  fb->header.frame_id = state.getRobotModel()->getModelFrame();
   fb->header.stamp = ros::Time(0);
 
   query_goal_state_->handleEndEffector(eef, fb);
@@ -503,12 +513,15 @@ void cat::CatBackend::timerCallback()
 
 void cat::CatBackend::setAndPublishLastCurrentState(const sensor_msgs::JointStateConstPtr& joint_state )
 {
-  moveit_msgs::PlanningScene gs;
+  moveit_msgs::DisplayRobotState drs;
   boost::mutex::scoped_lock slock(last_current_state_lock_);
   ROS_DEBUG_NAMED("state", "Saving new last_current_state");
   last_current_state_ = planning_scene_monitor_->getStateMonitor()->getCurrentStateAndTime().first;
-  robot_state::robotStateToRobotStateMsg(*last_current_state_, gs.robot_state);
-  publish_current_state_.publish(gs);
+  robot_state::robotStateToRobotStateMsg(*last_current_state_, drs.state);
+  publish_current_state_.publish(drs);
+  if(!show_ik_solution_)
+    publish_goal_state_.publish(drs);
+
   //updateInactiveGroupsFromCurrentRobot();
 }
 
@@ -683,7 +696,7 @@ void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
                                                                                                        .001, .001));
   }
   else{
-    const kinematic_model::JointModelGroup* jmg = getKinematicModel()->getJointModelGroup(group_name);
+    const robot_model::JointModelGroup* jmg = getRobotModel()->getJointModelGroup(group_name);
     const std::map<std::string, unsigned int>& joint_index_map = jmg->getJointVariablesIndexMap();
     std::map<std::string, unsigned int>::const_iterator jim_it;
     moveit_msgs::Constraints c;
@@ -813,7 +826,7 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
   if(future_time < start_state.joint_state.header.stamp)
     future_time = start_state.joint_state.header.stamp;
 
-//  std::vector<moveit_msgs::JointLimits> limits = getKinematicModel()->getJointModelGroup(group_name)->getVariableLimits();
+//  std::vector<moveit_msgs::JointLimits> limits = getRobotModel()->getJointModelGroup(group_name)->getVariableLimits();
 //  for(size_t i = 0; i < limits.size(); ++i)
 //  {
 //    moveit_msgs::JointLimits& l = limits[i];
@@ -821,11 +834,11 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
 //      l.max_velocity *= config_.ik_speed_mult; // TODO magic number!
 //  }
 
-  const std::vector<moveit_msgs::JointLimits>& limits = getKinematicModel()->getJointModelGroup(group_name)->getVariableLimits();
+  const std::vector<moveit_msgs::JointLimits>& limits = getRobotModel()->getJointModelGroup(group_name)->getVariableLimits();
 
   // Find the largest joint change
   int max_steps = 2;
-  const std::vector<std::string>& joint_names = getKinematicModel()->getJointModelGroup(group_name)->getJointModelNames();
+  const std::vector<std::string>& joint_names = getRobotModel()->getJointModelGroup(group_name)->getJointModelNames();
   for(size_t i = 0; i < joint_names.size(); ++i)
   {
     double delta = fabs( goal_state->getJointState(joint_names[i])->getVariableValues()[0]
@@ -868,7 +881,7 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
   }
 
   // Reduce state count?
-  robot_trajectory::RobotTrajectoryPtr filtered_states(new robot_trajectory::RobotTrajectory(getKinematicModel(), group_name));
+  robot_trajectory::RobotTrajectoryPtr filtered_states(new robot_trajectory::RobotTrajectory(getRobotModel(), group_name));
   for(size_t i = 0; i < states.size() - 1; ++i)
   {
     if( 0 == (i % config_.ik_state_skip) )
@@ -1052,6 +1065,7 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
 
       plan.start_state_ = req.start_state;
       plan.trajectory_.joint_trajectory.header.stamp = future_time_limit;
+      plan.start_state_.joint_state.header.stamp = future_time_limit;
       psi_.setPlan(plan);
       if(config_.verbose)
       {
@@ -1069,7 +1083,7 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
 
 void cat::CatBackend::setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz)
 {
-  workspace_parameters_.header.frame_id = getKinematicModel()->getModelFrame();
+  workspace_parameters_.header.frame_id = getRobotModel()->getModelFrame();
   workspace_parameters_.header.stamp = ros::Time::now();
   workspace_parameters_.min_corner.x = minx;
   workspace_parameters_.min_corner.y = miny;
@@ -1114,10 +1128,13 @@ void cat::CatBackend::setAndPublishLastGoalState(const robot_state::RobotStateCo
 {
   boost::mutex::scoped_lock slock(last_goal_state_lock_);
   ROS_DEBUG("Saving new last_goal_state");
-  moveit_msgs::PlanningScene gs;
+  moveit_msgs::DisplayRobotState drs;
   *last_goal_state_ = *state;
-  robot_state::robotStateToRobotStateMsg(*last_goal_state_, gs.robot_state);
-  publish_goal_state_.publish(gs);
+  if(show_ik_solution_)
+  {
+    robot_state::robotStateToRobotStateMsg(*last_goal_state_, drs.state);
+    publish_goal_state_.publish(drs);
+  }
 }
 
 void cat::CatBackend::updateInactiveGroupsFromCurrentRobot()
@@ -1243,7 +1260,7 @@ void cat::CatBackend::changedPlanningGroup(void)
 {
   std::string group = config_.planning_group;
   if (!group.empty())
-    if (!getKinematicModel()->hasJointModelGroup(group))
+    if (!getRobotModel()->hasJointModelGroup(group))
     {
       ROS_ERROR("Didn't find JointModelGroup for group [%s]", group.c_str());
       config_.planning_group = "";
@@ -1254,7 +1271,7 @@ void cat::CatBackend::changedPlanningGroup(void)
   {
     ROS_INFO("Changing to group [%s]", group.c_str());
     query_goal_state_->clearPoseOffsets();
-    query_goal_state_->clearSavedMarkerPoses();
+    query_goal_state_->clearLastMarkerPoses();
     robot_interaction_->decideActiveComponents(group);
 
     // Set offsets
@@ -1290,13 +1307,13 @@ const planning_scene_monitor::PlanningSceneMonitorPtr& cat::CatBackend::getPlann
   return planning_scene_monitor_;
 }
 
-const kinematic_model::KinematicModelConstPtr& cat::CatBackend::getKinematicModel(void)
+const robot_model::RobotModelConstPtr& cat::CatBackend::getRobotModel(void)
 {
   if (planning_scene_monitor_)
-    return planning_scene_monitor_->getKinematicModel();
+    return planning_scene_monitor_->getRobotModel();
   else
   {
-    static kinematic_model::KinematicModelConstPtr empty;
+    static robot_model::RobotModelConstPtr empty;
     return empty;
   }
 }

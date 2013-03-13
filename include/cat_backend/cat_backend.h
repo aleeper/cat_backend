@@ -81,7 +81,7 @@ public:
   CatBackend(bool debug);
   ~CatBackend(void);
 
-  const kinematic_model::KinematicModelConstPtr& getKinematicModel(void);
+  const robot_model::RobotModelConstPtr& getRobotModel(void);
   planning_scene_monitor::LockedPlanningSceneRO getPlanningSceneRO(void) const;
   planning_scene_monitor::LockedPlanningSceneRW getPlanningSceneRW(void);
   const planning_scene_monitor::PlanningSceneMonitorPtr& getPlanningSceneMonitor(void);
@@ -200,6 +200,7 @@ protected: // members
   planning_pipeline::PlanningPipelinePtr ompl_planning_pipeline_;
   planning_pipeline::PlanningPipelinePtr cat_planning_pipeline_;
   bool allow_trajectory_execution_;
+  bool show_ik_solution_;
 
   ros::Publisher publish_goal_state_;
   ros::Publisher publish_current_state_;
