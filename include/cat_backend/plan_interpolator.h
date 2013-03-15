@@ -19,10 +19,10 @@ public:
   PlanInterpolator() : has_new_plan_(false), plan_is_valid_(false) {}
   ~PlanInterpolator(){}
 
-  void findIndexAtTimeFromStart(const ros::Duration& time, int& before, int& after, double &interpolate);
-
-  bool getStateAtTime(const ros::Time &request_time, robot_state::RobotStatePtr& start_state,
-                      moveit_msgs::RobotState& rs, bool do_interpolate);
+  bool getStateAtTime(const ros::Time &request_time,
+                      bool do_interpolate,
+                      robot_state::RobotStatePtr& start_state,
+                      ros::Time& actual_time);
 
   void printPlan();
 
@@ -32,9 +32,11 @@ public:
     plan_is_valid_ = false;
   }
 
-  void setPlan(const move_group_interface::MoveGroup::Plan& plan)
+  //void setPlan(const move_group_interface::::Plan& plan)
+  void setPlan(robot_trajectory::RobotTrajectoryPtr& robot_traj, const ros::Time& start_time)
   {
-    current_plan_.reset( new move_group_interface::MoveGroup::Plan(plan));
+    trajectory_ = robot_traj;
+    start_time_ = start_time;
     has_new_plan_ = true;
     plan_is_valid_ = true;
   }
@@ -49,14 +51,25 @@ public:
     has_new_plan_ = false;
   }
 
-  const move_group_interface::MoveGroup::Plan& getPlan()
+  //const move_group_interface::MoveGroup::Plan& getPlan()
+  const robot_trajectory::RobotTrajectory& getPlan()
   {
-    return *current_plan_;
+    return *trajectory_;
+  }
+
+  moveit_msgs::RobotTrajectory getPlanAsMsg()
+  {
+    moveit_msgs::RobotTrajectory msg;
+    trajectory_->getRobotTrajectoryMsg(msg);
+    msg.joint_trajectory.header.stamp = start_time_;
+    return msg;
   }
 
   bool has_new_plan_;
   bool plan_is_valid_;
-  boost::shared_ptr<move_group_interface::MoveGroup::Plan> current_plan_;
+  //boost::shared_ptr<move_group_interface::MoveGroup::Plan> current_plan_;
+  robot_trajectory::RobotTrajectoryPtr trajectory_;
+  ros::Time start_time_;
 
 };
 

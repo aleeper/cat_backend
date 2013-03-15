@@ -106,15 +106,20 @@ protected: // methods
 
   void updatePlanningScene();
 
+  bool isOutsideDeadband();
+  void addMPGoals(planning_interface::MotionPlanRequest& req);
+  void addCATGoals(planning_interface::MotionPlanRequest& req);
   void computeTeleopUpdate(const ros::Duration& target_period);
   void computeTeleopJTUpdate(const ros::Duration& target_period);
   void computeTeleopIKUpdate(const ros::Duration& target_period);
-  bool computeTeleopMPUpdate(const ros::Duration& target_period);
-  void computeTeleopCVXUpdate(const ros::Duration& target_period);
+  bool computeTeleopPlanningUpdate(const ros::Duration& target_period, const std::string& type);
+
+  //bool computeTeleopMPUpdate(const ros::Duration& target_period);
+  //void computeTeleopCVXUpdate(const ros::Duration& target_period);
   bool generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
-                    robot_state::RobotStatePtr &start_state,
                     planning_interface::MotionPlanRequest &req,
-                    planning_interface::MotionPlanResponse &res, const ros::Time &future_time_limit);
+                    planning_interface::MotionPlanResponse &res,
+                    const ros::Time &future_time_limit);
 
   std::string getCurrentPlannerId();
 
@@ -230,6 +235,8 @@ protected: // members
   ros::Timer timer_;
 
   plan_interpolator::PlanInterpolator psi_;
+  //robot_trajectory::RobotTrajectory last_trajectory_;
+  //ros::Time last_trajectory_time_;
 
   trajectory_processing::IterativeParabolicTimeParameterization smoother_;
 
