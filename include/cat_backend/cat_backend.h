@@ -91,7 +91,7 @@ public:
   void addPerceptionJob(const boost::function<void(void)> &job);
 
   // queue the execution of this function for the next time the main update() loop gets called
-  void addMainLoopJob(const boost::function<void(void)> &job);
+  //void addMainLoopJob(const boost::function<void(void)> &job);
 
 
 protected: // methods
@@ -100,8 +100,8 @@ protected: // methods
   void changedPlanningGroup(void);
   bool isIKSolutionCollisionFree(robot_state::JointStateGroup *group, const std::vector<double> &ik_solution) const;
 
-  void executeMainLoopJobs(void);
-  void updateBackgroundJobProgressBar(void);
+  //void executeMainLoopJobs(void);
+  //void updateBackgroundJobProgressBar(void);
   void backgroundJobCompleted(void);
 
   void updatePlanningScene();
@@ -242,7 +242,7 @@ protected: // members
 
   boost::shared_ptr<moveit_warehouse::RobotStateStorage> robot_state_storage_;
 
-  moveit_msgs::WorkspaceParameters workspace_parameters_;
+  //moveit_msgs::WorkspaceParameters workspace_parameters_;
 
 //  MoveGroupState move_state_;
 //  MoveGroupState pickup_state_;

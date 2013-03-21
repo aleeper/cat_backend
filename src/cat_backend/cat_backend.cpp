@@ -788,6 +788,9 @@ void cat::CatBackend::addCATGoals(planning_interface::MotionPlanRequest& req)
   }
 }
 
+//// ============================================================================
+//// ====================== Motion Planning and CAT Planning ====================
+//// ============================================================================
 
 bool cat::CatBackend::computeTeleopPlanningUpdate(const ros::Duration &target_period,
                                                   const std::string& type)
@@ -818,6 +821,7 @@ bool cat::CatBackend::computeTeleopPlanningUpdate(const ros::Duration &target_pe
   planning_interface::MotionPlanRequest req;
 
   robot_state::robotStateToRobotStateMsg(*future_start_state, req.start_state);
+  //ROS_WARN_STREAM("Start state: " << req.start_state);
   req.start_state.joint_state.header.stamp = future_time;
   req.group_name = group_name;
   req.planner_id = getCurrentPlannerId();
@@ -835,6 +839,7 @@ bool cat::CatBackend::computeTeleopPlanningUpdate(const ros::Duration &target_pe
   else if (type == "CAT") {
     addCATGoals(req);
     success = generatePlan(cat_planning_pipeline_, req, result, future_time);
+    success = true; // HACK
   }
   else {
     ROS_ERROR("Type [%s] is not valid!", type.c_str());
@@ -857,136 +862,6 @@ bool cat::CatBackend::computeTeleopPlanningUpdate(const ros::Duration &target_pe
   ROS_DEBUG("Done with TeleopPlanningUpdate");
   return success;
 }
-
-
-
-//// ============================================================================
-//// ============================= Motion Planning ==============================
-//// ============================================================================
-//bool cat::CatBackend::computeTeleopMPUpdate(const ros::Duration &target_period)
-//{
-//  ros::Time future_time = ros::Time::now() + target_period;
-//  ROS_DEBUG("TeleopMPUpdate!");
-//  std::string group_name = getCurrentPlanningGroup();
-//  if (group_name.empty())
-//    return true; // TODO HACK!!
-
-//  robot_state::RobotStatePtr future_start_state;
-//  try{
-//    boost::mutex::scoped_lock slock(last_current_state_lock_);
-//    future_start_state.reset( new robot_state::RobotState(*last_current_state_));
-//  }
-//  catch(...)
-//  {
-//    ROS_ERROR("Failed to copy the last current state, aborting planning request...");
-//    return true; // TODO HACK!!
-//  }
-
-//  ROS_DEBUG("Formulating planning request");
-//  if(!psi_.getStateAtTime( future_time, config_.interpolate, future_start_state, future_time))
-//  {
-//    ROS_DEBUG("Getting ahead of ourselves, waiting for next cycle...");
-//    return true; // TODO HACK!!
-//  }
-//  planning_interface::MotionPlanRequest req;
-
-//  robot_state::robotStateToRobotStateMsg(*future_start_state, req.start_state);
-//  req.start_state.joint_state.header.stamp = future_time;
-//  req.group_name = group_name;
-//  req.planner_id = getCurrentPlannerId();
-//  req.num_planning_attempts = 1;
-//  // Stuff that might be strategy dependent
-//  req.allowed_planning_time = target_period.toSec()*0.75;
-
-//  // Goals -------------------------------------------------------------------------------------
-//  ROS_DEBUG("Constructing goal constraint...");
-//  req.goal_constraints.resize(1);
-//  last_goal_state_lock_.lock();
-//  req.goal_constraints[0] = kinematic_constraints::constructGoalConstraints(last_goal_state_->getJointStateGroup(group_name), config_.joint_tolerance);
-//  last_goal_state_lock_.unlock();
-//  // -------------------------------------------------------------------------------------
-
-//  planning_interface::MotionPlanResponse result;
-//  bool success = generatePlan(ompl_planning_pipeline_, req, result, future_time);
-
-//  // ==========================================
-//  // Send out last plan for execution.
-//  // It is stamped with a time in the future, so it should be ok to send it now.
-//  if(psi_.hasNewPlan())
-//  {
-//    ROS_DEBUG_NAMED("cat_backend", "Sending most recent plan for execution.");
-//    trajectory_execution_manager_->pushAndExecute(psi_.getPlanAsMsg()); // TODO should specify the controller huh?
-//    psi_.setPlanAsOld();
-//  }
-//  else
-//  {
-//    ROS_DEBUG("No plan saved, not executing anything.");
-//  }
-//  ROS_DEBUG("Done with TeleopMPUpdate");
-//  return success;
-//}
-
-//// =============================================================================
-//// =============================== CAT Planners ================================
-//// =============================================================================
-//void cat::CatBackend::computeTeleopCVXUpdate(const ros::Duration &target_period)
-//{
-//  ros::Time future_time = ros::Time::now() + target_period;
-//  ROS_DEBUG("TeleopCVXUpdate!");
-//  std::string group_name = getCurrentPlanningGroup();
-//  if (group_name.empty())
-//    return;
-
-//  robot_state::RobotStatePtr future_start_state;
-//  try{
-//    boost::mutex::scoped_lock slock(last_current_state_lock_);
-//    future_start_state.reset( new robot_state::RobotState(*last_current_state_));
-//  }
-//  catch(...)
-//  {
-//    ROS_ERROR("Failed to copy the last current state, aborting planning request...");
-//    return;
-//  }
-
-//  ROS_DEBUG("Formulating planning request");
-//  if(!psi_.getStateAtTime( future_time, config_.interpolate, future_start_state, future_time))
-//  {
-//    ROS_DEBUG("Getting ahead of ourselves, waiting for next cycle...");
-//    return;
-//  }
-//  planning_interface::MotionPlanRequest req;
-
-//  robot_state::robotStateToRobotStateMsg(*future_start_state, req.start_state);
-//  req.start_state.joint_state.header.stamp = future_time;
-//  req.group_name = group_name;
-//  req.planner_id = getCurrentPlannerId();
-//  req.num_planning_attempts = 1;
-//  // Stuff that might be strategy dependent
-//  req.allowed_planning_time = target_period.toSec()*0.75;
-
-//  // Goals -------------------------------------------------------------------------------------
-
-//  // -------------------------------------------------------------------------------------
-
-//  planning_interface::MotionPlanResponse res;
-//  generatePlan(cat_planning_pipeline_, req, res, future_time);
-
-//  // ==========================================
-//  // Send out last plan for execution.
-//  // It is stamped with a time in the future, so it should be ok to send it now.
-//  if(psi_.hasNewPlan())
-//  {
-//    ROS_DEBUG_NAMED("cat_backend", "Sending most recent plan for execution.");
-//    trajectory_execution_manager_->pushAndExecute(psi_.getPlanAsMsg()); // TODO should specify the controller huh?
-//    psi_.setPlanAsOld();
-//  }
-//  else
-//  {
-//    ROS_DEBUG("No plan saved, not executing anything.");
-//  }
-//  ROS_DEBUG("Done with TeleopCVXUpdate");
-//  return; // should we return a bool?
-//}
 
 bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr &pipeline,
                                    planning_interface::MotionPlanRequest& req,
@@ -1023,6 +898,9 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
     {
       ROS_DEBUG("Planning SUCCESS, saving plan.");
 
+      //moveit_msgs::RobotState rs;
+      //robot_state::robotStateToRobotStateMsg(res.trajectory_->getWayPoint(1), rs);
+      //ROS_WARN_STREAM("Second waypoint of plan: " << rs);
       psi_.setPlan(res.trajectory_, future_time_limit);
 
       if(config_.verbose)
@@ -1037,18 +915,6 @@ bool cat::CatBackend::generatePlan(const planning_pipeline::PlanningPipelinePtr 
     ROS_WARN("Planning FAILED, not saving anything.");
   }
   return solved;
-}
-
-void cat::CatBackend::setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz)
-{
-  workspace_parameters_.header.frame_id = getRobotModel()->getModelFrame();
-  workspace_parameters_.header.stamp = ros::Time::now();
-  workspace_parameters_.min_corner.x = minx;
-  workspace_parameters_.min_corner.y = miny;
-  workspace_parameters_.min_corner.z = minz;
-  workspace_parameters_.max_corner.x = maxx;
-  workspace_parameters_.max_corner.y = maxy;
-  workspace_parameters_.max_corner.z = maxz;
 }
 
 void cat::CatBackend::onQueryGoalStateUpdate(robot_interaction::RobotInteraction::InteractionHandler* ih, bool needs_refresh)
@@ -1423,39 +1289,51 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
 // ======================== Stuff that may never get used ==============================
 // =====================================================================================
 
-void cat::CatBackend::addMainLoopJob(const boost::function<void(void)> &job)
-{
-  boost::mutex::scoped_lock slock(main_loop_jobs_lock_);
-  main_loop_jobs_.push_back(job);
-}
+//void cat::CatBackend::addMainLoopJob(const boost::function<void(void)> &job)
+//{
+//  boost::mutex::scoped_lock slock(main_loop_jobs_lock_);
+//  main_loop_jobs_.push_back(job);
+//}
 
-void cat::CatBackend::executeMainLoopJobs(void)
-{
-  main_loop_jobs_lock_.lock();
-  while (!main_loop_jobs_.empty())
-  {
-    boost::function<void(void)> fn = main_loop_jobs_.front();
-    main_loop_jobs_.pop_front();
-    main_loop_jobs_lock_.unlock();
-    try
-    {
-      fn();
-    }
-    catch(std::runtime_error &ex)
-    {
-      ROS_ERROR("Exception caught executing main loop job: %s", ex.what());
-    }
-    catch(...)
-    {
-      ROS_ERROR("Exception caught executing main loop job");
-    }
-    main_loop_jobs_lock_.lock();
-  }
-  main_loop_jobs_lock_.unlock();
-}
+//void cat::CatBackend::executeMainLoopJobs(void)
+//{
+//  main_loop_jobs_lock_.lock();
+//  while (!main_loop_jobs_.empty())
+//  {
+//    boost::function<void(void)> fn = main_loop_jobs_.front();
+//    main_loop_jobs_.pop_front();
+//    main_loop_jobs_lock_.unlock();
+//    try
+//    {
+//      fn();
+//    }
+//    catch(std::runtime_error &ex)
+//    {
+//      ROS_ERROR("Exception caught executing main loop job: %s", ex.what());
+//    }
+//    catch(...)
+//    {
+//      ROS_ERROR("Exception caught executing main loop job");
+//    }
+//    main_loop_jobs_lock_.lock();
+//  }
+//  main_loop_jobs_lock_.unlock();
+//}
 
-void cat::CatBackend::updateBackgroundJobProgressBar(void)
-{
-  std::size_t n = teleop_process_.getJobCount();
-  // publish job count?
-}
+//void cat::CatBackend::updateBackgroundJobProgressBar(void)
+//{
+//  std::size_t n = teleop_process_.getJobCount();
+//  // publish job count?
+//}
+
+//void cat::CatBackend::setWorkspace(double minx, double miny, double minz, double maxx, double maxy, double maxz)
+//{
+//  workspace_parameters_.header.frame_id = getRobotModel()->getModelFrame();
+//  workspace_parameters_.header.stamp = ros::Time::now();
+//  workspace_parameters_.min_corner.x = minx;
+//  workspace_parameters_.min_corner.y = miny;
+//  workspace_parameters_.min_corner.z = minz;
+//  workspace_parameters_.max_corner.x = maxx;
+//  workspace_parameters_.max_corner.y = maxy;
+//  workspace_parameters_.max_corner.z = maxz;
+//}
