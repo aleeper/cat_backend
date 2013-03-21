@@ -16,10 +16,10 @@ bool PlanInterpolator::getStateAtTime(const ros::Time &request_time,
   //TODO this is a bad check, we need to differtiate between "too early" and "not valid"
   if( plan_is_valid_ && trajectory_ ) // && current_plan_->trajectory_.joint_trajectory.points.size() >= 2)
   {
+    double request_duration = duration.toSec();
+    double actual_duration = 0;
 
-    double actual_duration = duration.toSec();
-
-    trajectory_->getStateAtDurationFromStart(actual_duration, do_interpolate, start_state, actual_duration);
+    trajectory_->getStateAtDurationFromStart(request_duration, do_interpolate, start_state, actual_duration);
     ros::Time temp_time = start_time_ + ros::Duration(actual_duration - 0.000001) ; // avoid double comparison issues later
     if(request_time < temp_time)
       actual_time = temp_time;
