@@ -17,10 +17,21 @@ bool PlanInterpolator::getStateAtTime(const ros::Time &request_time,
   if( plan_is_valid_ && trajectory_ ) // && current_plan_->trajectory_.joint_trajectory.points.size() >= 2)
   {
     double request_duration = duration.toSec();
-    double actual_duration = 0;
 
-    trajectory_->getStateAtDurationFromStart(request_duration, do_interpolate, start_state, actual_duration);
-    ros::Time temp_time = start_time_ + ros::Duration(actual_duration - 0.000001) ; // avoid double comparison issues later
+    int before=0, after=0;
+    double blend = 1.0;
+    trajectory_->findWayPointIndicesForDurationAfterStart(request_duration, before, after, blend);
+
+    //logInform("Time is %.3f of the way between index %d and %d. Rounding up to index %d.", blend, before, after, after);
+    *start_state = trajectory_->getWayPoint(after);
+    const std::vector<robot_state::JointState*> &jsv_in = trajectory_->getWayPoint(after).getJointStateVector();
+    const std::vector<robot_state::JointState*> &jsv_out = start_state->getJointStateVector();
+    for(int i = 0; i < jsv_out.size(); i++)
+      jsv_out[i]->getVelocities() = jsv_in[i]->getVelocities();
+
+    ros::Time temp_time = start_time_ +
+        ros::Duration(trajectory_->getWaypointDurationFromStart(after) - 0.0001) ;
+    // magic number is to try to avoid double comparison issues later
     if(request_time < temp_time)
       actual_time = temp_time;
     else
