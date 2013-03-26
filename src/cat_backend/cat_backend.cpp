@@ -108,9 +108,9 @@ private:
     {
       owner_->query_goal_state_->setIKAttempts(config.ik_attempts);
       owner_->query_goal_state_->setIKTimeout(config.ik_timeout);
-      owner_->query_goal_state_->setInteractionMode( (config.ik_type == cat_backend::Backend_POSITION_IK) ?
-                                               robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
-                                             : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
+//      owner_->query_goal_state_->setInteractionMode( (config.ik_type == cat_backend::Backend_POSITION_IK) ?
+//                                               robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
+//                                             : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
     }
 
     if(level == cat_backend::Backend_RECORD_DATA)
@@ -285,9 +285,9 @@ cat::CatBackend::CatBackend(bool debug)
   query_goal_state_->setMeshesVisible(true);
   query_goal_state_->setIKAttempts(config_.ik_attempts);
   query_goal_state_->setIKTimeout(config_.ik_timeout);
-  query_goal_state_->setInteractionMode( (config_.ik_type == cat_backend::Backend_POSITION_IK) ?
-                                           robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
-                                         : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
+//  query_goal_state_->setInteractionMode( (config_.ik_type == cat_backend::Backend_POSITION_IK) ?
+//                                           robot_interaction::RobotInteraction::InteractionHandler::POSITION_IK
+//                                         : robot_interaction::RobotInteraction::InteractionHandler::VELOCITY_IK);
 
   // ===== RSS Metrics =====
   //ROS_INFO("CAT backend: Metric publishers");
@@ -1062,32 +1062,34 @@ void cat::CatBackend::clearAndRenewInteractiveMarkers(void)
   }
 }
 
-//void cat::CatBackend::updateQueryGoalState(void)
-//{
-//  publishInteractiveMarkers();
-////  addMainLoopJob(boost::bind(&MotionPlanningDisplay::changedQueryGoalState, this));
-////  context_->queueRender();
-//}
-
-//void cat::CatBackend::setQueryGoalState(const robot_state::RobotStatePtr &goal)
-//{
-//  query_goal_state_->setState(*goal);
-//  updateQueryGoalState();
-//}
+// TODO this... shouldn't be hard-coded, even as part of dynamic reconfigure
+std::string planningGroupFromId(int id)
+{
+  switch(id){
+  case cat_backend::Backend_GROUP_NONE:
+    return "";
+  case cat_backend::Backend_GROUP_LEFTARM:
+    return "left_arm";
+  case cat_backend::Backend_GROUP_RIGHTARM:
+    return "right_arm";
+  case cat_backend::Backend_GROUP_ARMS:
+    return "arms";
+  }
+}
 
 std::string cat::CatBackend::getCurrentPlanningGroup(void) const
 {
-  return config_.planning_group;
+  return planningGroupFromId(config_.planning_group);
 }
 
 void cat::CatBackend::changedPlanningGroup(void)
 {
-  std::string group = config_.planning_group;
+  std::string group = planningGroupFromId(config_.planning_group);
   if (!group.empty())
     if (!getRobotModel()->hasJointModelGroup(group))
     {
       ROS_ERROR("Didn't find JointModelGroup for group [%s]", group.c_str());
-      config_.planning_group = "";
+      config_.planning_group = cat_backend::Backend_GROUP_NONE;
       return;
     }
 
@@ -1288,6 +1290,19 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
 // =====================================================================================
 // ======================== Stuff that may never get used ==============================
 // =====================================================================================
+
+//void cat::CatBackend::updateQueryGoalState(void)
+//{
+//  publishInteractiveMarkers();
+////  addMainLoopJob(boost::bind(&MotionPlanningDisplay::changedQueryGoalState, this));
+////  context_->queueRender();
+//}
+
+//void cat::CatBackend::setQueryGoalState(const robot_state::RobotStatePtr &goal)
+//{
+//  query_goal_state_->setState(*goal);
+//  updateQueryGoalState();
+//}
 
 //void cat::CatBackend::addMainLoopJob(const boost::function<void(void)> &job)
 //{
