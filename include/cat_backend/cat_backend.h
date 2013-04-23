@@ -44,7 +44,7 @@
 #include <moveit/planning_pipeline/planning_pipeline.h>
 #include <moveit/trajectory_execution_manager/trajectory_execution_manager.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
-#include <moveit/move_group/names.h>
+//#include <moveit/move_group/names.h>
 #include <moveit/move_group_interface/move_group.h>
 #include <moveit/trajectory_processing/trajectory_tools.h>
 
@@ -206,6 +206,8 @@ protected: // members
   planning_pipeline::PlanningPipelinePtr cat_planning_pipeline_;
   bool allow_trajectory_execution_;
   bool show_ik_solution_;
+  bool use_warehouse_;
+  bool warehouse_connected_;
 
   ros::Publisher publish_goal_state_;
   ros::Publisher publish_current_state_;

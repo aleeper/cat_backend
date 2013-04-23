@@ -6,7 +6,9 @@
   <arg name="pr2_ik" default="true" />
   <arg name="load_robot_description" default="false" />
   <arg name="allow_trajectory_execution" default="true"/>
+  <arg name="use_warehouse" default="false"/>
   <arg name="max_safe_path_cost" default="1"/>
+  <arg name="start_jt" default="false" />
 
   <arg name="debug" default="false" />
   <arg unless="$(arg debug)" name="launch_prefix" value="" />
@@ -17,17 +19,17 @@
   <arg name="command_args" value="$(arg debug_args) --threads $(arg threads)" />
 
   
-  <include file="$(find cat_backend)/launch/c_jt.launch" >
+  <include if="$(arg start_jt)" file="$(find cat_backend)/launch/c_jt.launch" >
   </include>
 
-  <include unless="$(arg prj)" file="$(find cat_backend)/launch/planning_context.launch" >
+  <include unless="$(arg prj)" file="$(find pr2_moveit_config)/launch/planning_context.launch" >
     <arg name="load_robot_description" value="$(arg load_robot_description)" />
   </include>
   <include if="$(arg prj)" file="$(find pr2ft_moveit_config)/launch/planning_context.launch" >
     <arg name="load_robot_description" value="$(arg load_robot_description)" />
   </include>
   
-  <include ns="$(arg cat_node_name)" file="$(find pr2_moveit_config)/launch/planning_pipeline.launch">
+  <include ns="$(arg cat_node_name)/ompl" file="$(find pr2_moveit_config)/launch/planning_pipeline.launch">
     <arg name="pipeline" value="ompl" />
   </include>
   
@@ -48,10 +50,11 @@
     <param name="warehouse_port" value="33829"/>
     <param name="warehouse_host" value="localhost"/>
     <param name="allow_trajectory_execution" value="$(arg allow_trajectory_execution)"/>
+    <param name="use_warehouse" value="$(arg use_warehouse)"/>
     <param name="max_safe_path_cost" value="$(arg max_safe_path_cost)"/>
     <param name="planning_scene_monitor/publish_planning_scene" value="true"/>
-    <rosparam if="$(arg prj)"     command="load" file="$(find cat_backend)/config/pr2_kinematics.yaml"/>
-    <rosparam unless="$(arg prj)" command="load" file="$(find pr2ft_moveit_config)/config/kinematics.yaml"/>
+    <rosparam if="$(arg prj)"     command="load" file="$(find pr2ft_moveit_config)/config/kinematics.yaml"/>
+    <rosparam unless="$(arg prj)" command="load" file="$(find pr2_moveit_config)/config/kinematics.yaml"/>
   </node>
   
 </launch>

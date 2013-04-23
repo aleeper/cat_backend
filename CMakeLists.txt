@@ -18,8 +18,9 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs 
   moveit_msgs 
   moveit_core 
-  moveit_ompl_planners_ros_plugin
+  moveit_planners_ompl
   moveit_ros_planning_interface 
+  moveit_ros_robot_interaction 
   roscpp 
   tf
   dynamic_reconfigure

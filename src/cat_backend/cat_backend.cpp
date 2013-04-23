@@ -209,6 +209,8 @@ cat::CatBackend::CatBackend(bool debug)
     node_handle_("~"),
     allow_trajectory_execution_(true),
     show_ik_solution_(true),
+    use_warehouse_(false),
+    warehouse_connected_(false),
     record_data_(false),
     cycle_id_(0)
 {
@@ -246,9 +248,11 @@ cat::CatBackend::CatBackend(bool debug)
   // ===== Planning =====
   ROS_INFO("CAT backend: Initializing planning pipelines");
   ompl_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getRobotModel(),
+                                                                        ros::NodeHandle("~/ompl"),
                                                                         "planning_plugin", "request_adapters"));
   cat_planning_pipeline_.reset(new planning_pipeline::PlanningPipeline(planning_scene_monitor_->getRobotModel(),
-                                                                       "cat/planning_plugin", "cat/request_adapters"));
+                                                                       ros::NodeHandle("~/cat"),
+                                                                       "planning_plugin", "request_adapters"));
   cat_planning_pipeline_->checkSolutionPaths(false);
 
   if (debug)
@@ -298,7 +302,9 @@ cat::CatBackend::CatBackend(bool debug)
                                                      boost::bind(&CatBackend::onNewWrench, this, _1));
 
   // ===== Robot State Storage =====
-  initWarehouse();
+  node_handle_.param("use_warehouse", use_warehouse_, false);
+  if(use_warehouse_)
+    initWarehouse();
 
 
   // ===== Get ready to go =====
@@ -320,8 +326,17 @@ cat::CatBackend::~CatBackend(void)
 void cat::CatBackend::initWarehouse()
 {
   ROS_INFO("CAT backend: Initializing warehouse connection");
-  robot_state_storage_.reset(new moveit_warehouse::RobotStateStorage("localhost", 33829, 5.0));
+  try{
+    robot_state_storage_.reset(new moveit_warehouse::RobotStateStorage("localhost", 33829, 2.0));
+  }
+  catch(...)
+  {
+    ROS_ERROR("Unable to connect to warehouse, proceeding without one!");
+    warehouse_connected_ = false;
+    return;
+  }
 
+  warehouse_connected_ = true;
   std::vector<std::string> known_poses;
   robot_state_storage_->getKnownRobotStates(known_poses);
   for(size_t i = 0; i < known_poses.size(); ++i)
@@ -331,10 +346,14 @@ void cat::CatBackend::initWarehouse()
     moveit_msgs::RobotState rs = static_cast<const moveit_msgs::RobotState&>(*msg);
     ROS_INFO_STREAM("Found known pose " << known_poses[i].c_str() << ".");
   }
+
 }
 
 void cat::CatBackend::goToRobotState(const std::string& pose_name)
 {
+  if(!use_warehouse_ || !warehouse_connected_)
+    return;
+
   moveit_warehouse::RobotStateWithMetadata msg;
   if(!robot_state_storage_->getRobotState(msg, pose_name))
   {

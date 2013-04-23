@@ -2,7 +2,7 @@
 #define PLAN_INTERPOLATOR_H
 
 
-#include <moveit/move_group/names.h>
+//#include <moveit/move_group/names.h>
 #include <moveit/move_group_interface/move_group.h>
 #include <moveit/robot_state/conversions.h>
 #include <moveit/robot_state/robot_state.h>
