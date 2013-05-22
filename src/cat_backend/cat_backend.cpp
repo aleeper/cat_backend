@@ -268,7 +268,7 @@ cat::CatBackend::CatBackend(bool debug)
   if (allow_trajectory_execution_)
   {
     ROS_INFO("CAT backend: Initializing trajectory execution manager");
-    trajectory_execution_manager_.reset(new trajectory_execution_manager::TrajectoryExecutionManager(planning_scene_monitor_->getRobotModel()));
+    trajectory_execution_manager_.reset(new trajectory_execution_manager::TrajectoryExecutionManager(planning_scene_monitor_->getRobotModel(), true));
   }
   publish_cartesian_goal_right_ = root_node_handle_.advertise<geometry_msgs::PoseStamped>(CARTESIAN_RIGHT_ARM + CARTESIAN_COMMAND_SUFFIX, 1);
   publish_cartesian_goal_left_ = root_node_handle_.advertise<geometry_msgs::PoseStamped>(CARTESIAN_LEFT_ARM + CARTESIAN_COMMAND_SUFFIX, 1);
@@ -1206,7 +1206,6 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
     return;
   }
 
-  moveit_msgs::RobotState start_state;
   if(!psi_.getStateAtTime( future_time, config_.interpolate, future_start_state, future_time))
   {
     ROS_DEBUG("Getting ahead of ourselves, waiting for next cycle...");
@@ -1277,7 +1276,8 @@ void cat::CatBackend::computeTeleopIKUpdate(const ros::Duration &target_period)
   // Always add the last state
   filtered_states->addSuffixWayPoint(states.back(), 0);
 
-  smoother_.computeTimeStamps(*filtered_states, start_state);
+  smoother_.computeTimeStamps(*filtered_states);
+  //filtered_states->getRobotTrajectoryMsg(start_state);
 
   if(future_time < ros::Time::now() + ros::Duration(0.001)) // TODO this offset is a (vetted) magic number...
   {

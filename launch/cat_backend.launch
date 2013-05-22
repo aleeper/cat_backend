@@ -8,7 +8,7 @@
   <arg name="allow_trajectory_execution" default="true"/>
   <arg name="use_warehouse" default="false"/>
   <arg name="max_safe_path_cost" default="1"/>
-  <arg name="start_jt" default="false" />
+  <arg name="start_jt" default="true" />
 
   <arg name="debug" default="false" />
   <arg unless="$(arg debug)" name="launch_prefix" value="" />
