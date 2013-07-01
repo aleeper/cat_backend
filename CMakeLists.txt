@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(cat_backend)
 
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
 set(MSG_DEPS
   std_msgs
   actionlib_msgs
@@ -11,9 +15,6 @@ set(MSG_DEPS
 
 find_package(Boost REQUIRED system filesystem date_time program_options signals thread)
 
-## Find catkin macros and libraries
-## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
-## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS 
   geometry_msgs 
   moveit_msgs 
@@ -36,31 +37,6 @@ find_package(catkin REQUIRED COMPONENTS
 ## modules and scripts declared therein get installed
 # catkin_python_setup()
 
-#######################################
-## Declare ROS messages and services ##
-#######################################
-
-## Generate messages in the 'msg' folder
-# add_message_files(
-#   FILES
-#   Message1.msg
-#   Message2.msg
-# )
-
-## Generate services in the 'srv' folder
-# add_service_files(
-#   FILES
-#   Service1.srv
-#   Service2.srv
-# )
-
-## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   geometry_msgs#   moveit_msgs
-# )
-
-
 generate_dynamic_reconfigure_options( 
   "cfg/Backend.cfg" 
   )
@@ -69,14 +45,10 @@ generate_dynamic_reconfigure_options(
 ## Declare things to be passed to other projects ##
 ###################################################
 
-## LIBRARIES: libraries you create in this project that dependent projects also need
-## CATKIN_DEPENDS: catkin_packages dependent projects also need
-## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES cat_backend
   CATKIN_DEPENDS geometry_msgs moveit_core moveit_msgs moveit_ros_planning_interface roscpp tf
-#  DEPENDS system_lib
 )
 
 ###########
@@ -117,19 +89,13 @@ target_link_libraries(cat_backend ${catkin_LIBRARIES} ${Boost_LIBRARIES})
 ## Install ##
 #############
 
-## Mark executable scripts (Python etc.) for installation
-## not required for python when using catkin_python_setup()
-# install(PROGRAMS
-#   scripts/my_python_script
-#   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-# )
 
 ## Mark executables and/or libraries for installation
-# install(TARGETS cat_backend cat_backend_node
-#   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-#   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-#   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-# )
+ install(TARGETS cat_backend cat_backend_node
+   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+ )
 
 ## Mark cpp header files for installation
  install(DIRECTORY include/${PROJECT_NAME}/
